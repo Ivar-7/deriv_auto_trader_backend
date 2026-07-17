@@ -10,7 +10,9 @@ const validEnvironment = {
   DATABASE_URL:
     'postgresql://postgres:postgres@localhost:5432/deriv_auto_trader_test',
   DERIV_APP_ID: '1089',
-  DERIV_OAUTH_REDIRECT_URI: 'http://localhost:5173/auth/deriv/callback'
+  DERIV_OAUTH_REDIRECT_URI: 'http://localhost:3000/api/v1/auth/deriv/callback',
+  SESSION_COOKIE_SECRET:
+    'test-session-cookie-secret-must-be-at-least-thirty-two-characters'
 }
 
 test('loads a valid application environment', () => {

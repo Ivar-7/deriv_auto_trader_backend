@@ -15,9 +15,38 @@ export interface AuthorizedAccount {
   readonly accountId: string
   readonly displayName: string
   readonly currency: string
-  readonly balance: string
+  readonly balance: string | null
   readonly kind: AccountKind
   readonly connectionState: ConnectionState
+}
+
+export interface AccountConnectionSession {
+  readonly accounts: readonly AuthorizedAccount[]
+  readonly selectedAccountId: string | null
+  readonly expiresAt: string
+}
+
+export interface OpenContractSummary {
+  readonly contractId: string
+  readonly status: string
+  readonly buyPrice: string | null
+  readonly currentSpot: string | null
+  readonly profitLoss: string | null
+  readonly isSold: boolean
+}
+
+export interface ReconciliationSummary {
+  readonly accountId: string
+  readonly openContracts: readonly OpenContractSummary[]
+  readonly settlements: readonly ContractSettlementSummary[]
+  readonly reconciledSettlements: number
+  readonly reconciledAt: string | null
+}
+
+export interface ContractSettlementSummary {
+  readonly contractId: string
+  readonly profitLoss: string | null
+  readonly settledAt: string
 }
 
 export const automationSessionStates = [
@@ -40,6 +69,44 @@ export interface AutomationSession {
   readonly botType: string
   readonly market: string
   readonly state: AutomationSessionState
+  readonly startedAt: string | null
+  readonly endedAt: string | null
+  readonly runningProfitLoss: string
+}
+
+export interface ContractProposalInput {
+  readonly botType: string
+  readonly market: string
+  readonly contractType: string
+  readonly stake: string
+  readonly duration: number
+  readonly durationUnit: 't' | 's' | 'm' | 'h' | 'd'
+  readonly barrier: string | null
+}
+
+export interface ContractPreview {
+  readonly id: string
+  readonly accountId: string
+  readonly currency: string
+  readonly proposalId: string
+  readonly input: ContractProposalInput
+  readonly askPrice: string
+  readonly potentialPayout: string
+  readonly description: string | null
+  readonly expiresAt: string
+}
+
+export interface TrackedContract extends OpenContractSummary {
+  readonly derivStatus: string
+  readonly platformStatus: TradeStatus
+  readonly canSell: boolean
+  readonly canCancel: boolean
+  readonly actionReason: string | null
+}
+
+export interface AutomationCycle {
+  readonly accountId: string
+  readonly isActive: boolean
   readonly startedAt: string | null
   readonly endedAt: string | null
   readonly runningProfitLoss: string
@@ -98,6 +165,17 @@ export interface SessionRiskLimits {
   readonly maximumTrades: number | null
   readonly maximumConsecutiveLosses: number | null
   readonly maximumCumulativeStake: string | null
+}
+
+export interface AccountRiskProfile {
+  readonly limits: AccountRiskLimits
+  readonly emergencyStopActive: boolean
+  readonly updatedAt: string
+}
+
+export interface RiskSnapshot {
+  readonly account: AccountRiskProfile
+  readonly sessions: readonly SessionRiskLimits[]
 }
 
 export type ActivityCategory =

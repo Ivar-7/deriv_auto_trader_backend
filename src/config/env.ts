@@ -17,7 +17,17 @@ const appConfigSchema = z.object({
   CORS_ORIGIN: z.string().url(),
   DATABASE_URL: z.string().url(),
   DERIV_APP_ID: requiredDerivAppId,
-  DERIV_OAUTH_REDIRECT_URI: z.string().url()
+  DERIV_OAUTH_REDIRECT_URI: z.string().url(),
+  DERIV_AUTHORIZATION_URL: z
+    .string()
+    .url()
+    .default('https://auth.deriv.com/oauth2/auth'),
+  DERIV_TOKEN_URL: z
+    .string()
+    .url()
+    .default('https://auth.deriv.com/oauth2/token'),
+  DERIV_API_BASE_URL: z.string().url().default('https://api.derivws.com'),
+  SESSION_COOKIE_SECRET: z.string().min(32)
 })
 
 export type AppConfig = Readonly<{
@@ -28,6 +38,10 @@ export type AppConfig = Readonly<{
   databaseUrl: string
   derivAppId: string
   derivOauthRedirectUri: string
+  derivAuthorizationUrl: string
+  derivTokenUrl: string
+  derivApiBaseUrl: string
+  sessionCookieSecret: string
 }>
 
 export function loadAppConfig(environment: NodeJS.ProcessEnv): AppConfig {
@@ -49,6 +63,10 @@ export function loadAppConfig(environment: NodeJS.ProcessEnv): AppConfig {
     corsOrigin: parsed.data.CORS_ORIGIN,
     databaseUrl: parsed.data.DATABASE_URL,
     derivAppId: parsed.data.DERIV_APP_ID,
-    derivOauthRedirectUri: parsed.data.DERIV_OAUTH_REDIRECT_URI
+    derivOauthRedirectUri: parsed.data.DERIV_OAUTH_REDIRECT_URI,
+    derivAuthorizationUrl: parsed.data.DERIV_AUTHORIZATION_URL,
+    derivTokenUrl: parsed.data.DERIV_TOKEN_URL,
+    derivApiBaseUrl: parsed.data.DERIV_API_BASE_URL,
+    sessionCookieSecret: parsed.data.SESSION_COOKIE_SECRET
   }
 }

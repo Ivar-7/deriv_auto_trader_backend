@@ -4,6 +4,6 @@ import fp from 'fastify-plugin'
 export default fp(async (fastify) => {
   await fastify.register(cors, {
     origin: fastify.config.corsOrigin,
-    credentials: false
+    credentials: true
   })
 })

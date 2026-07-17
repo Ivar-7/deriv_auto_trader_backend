@@ -10,7 +10,9 @@ process.env.DATABASE_URL =
   'postgresql://postgres:postgres@localhost:5432/deriv_auto_trader_test'
 process.env.DERIV_APP_ID = '1089'
 process.env.DERIV_OAUTH_REDIRECT_URI =
-  'http://localhost:5173/auth/deriv/callback'
+  'http://localhost:3000/api/v1/auth/deriv/callback'
+process.env.SESSION_COOKIE_SECRET =
+  'test-session-cookie-secret-must-be-at-least-thirty-two-characters'
 
 export type TestContext = {
   after: typeof test.after
