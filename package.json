@@ -1,0 +1,50 @@
+{
+  "name": "deriv_auto_trader_backend",
+  "version": "1.0.0",
+  "description": "This project was bootstrapped with Fastify-CLI.",
+  "main": "app.ts",
+  "directories": {
+    "test": "test"
+  },
+  "scripts": {
+    "build": "npm run build:ts",
+    "build:ts": "tsc",
+    "db:migrate": "ts-node scripts/migrate.ts",
+    "watch:ts": "tsc -w",
+    "dev": "npm run build:ts && concurrently -k -p \"[{name}]\" -n \"TypeScript,App\" -c \"yellow.bold,cyan.bold\" \"npm:watch:ts\" \"npm:dev:start\"",
+    "dev:start": "fastify start --ignore-watch=.ts$ -w -l info -P dist/app.js",
+    "format": "prettier --write .",
+    "lint": "eslint .",
+    "start": "npm run build:ts && fastify start -l info dist/app.js",
+    "test": "npm run build:ts && tsc -p test/tsconfig.json && c8 node --test -r ts-node/register \"test/**/*.test.ts\"",
+    "typecheck": "tsc --noEmit"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "@fastify/autoload": "^6.0.0",
+    "@fastify/cors": "^11.3.0",
+    "@fastify/sensible": "^6.0.0",
+    "dotenv": "^17.4.2",
+    "fastify": "^5.0.0",
+    "fastify-cli": "^7.4.1",
+    "fastify-plugin": "^5.0.0",
+    "pg": "^8.22.0",
+    "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "@types/node": "^24.0.8",
+    "@types/pg": "^8.20.0",
+    "c8": "^10.1.2",
+    "concurrently": "^9.0.0",
+    "eslint": "^10.7.0",
+    "fastify-tsconfig": "^3.0.0",
+    "globals": "^17.7.0",
+    "prettier": "^3.9.5",
+    "ts-node": "^10.4.0",
+    "typescript": "~5.9.2",
+    "typescript-eslint": "^8.64.0"
+  }
+}
