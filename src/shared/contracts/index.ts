@@ -432,6 +432,91 @@ export interface AutoBulkProfile {
   readonly updatedAt: string
 }
 
+export type CopyStakeMode = 'fixed' | 'proportional'
+export type CopySource = 'bot' | 'bulk'
+export type CopyEntryStatus =
+  | 'submitted'
+  | 'accepted'
+  | 'rejected'
+  | 'pending'
+  | 'open'
+  | 'won'
+  | 'lost'
+  | 'expired'
+
+export interface MasterAcceptedTrade {
+  readonly derivSessionId: string
+  readonly source: CopySource
+  readonly sourceReference: string
+  readonly accountId: string
+  readonly currency: string
+  readonly derivContractId: string
+  readonly market: string
+  readonly contractType: string
+  readonly prediction: string | null
+  readonly barrier: number | null
+  readonly duration: number
+  readonly durationUnit: 't' | 's' | 'm' | 'h' | 'd'
+  readonly stake: string
+  readonly potentialPayout: string | null
+  readonly martingaleStep: number | null
+  readonly acceptedAt: string
+}
+
+export interface CopySubAccountConfiguration {
+  readonly accountId: string
+  readonly enabled: boolean
+  readonly stakeMode: CopyStakeMode
+  readonly fixedStake: string | null
+  readonly proportionalMultiplier: string | null
+  readonly maximumStake: string | null
+  readonly stopLoss: string | null
+  readonly allowedContractTypes: readonly string[]
+}
+
+export interface CopyEntry {
+  readonly id: string
+  readonly masterDerivContractId: string
+  readonly derivContractId: string | null
+  readonly status: CopyEntryStatus
+  readonly proposedStake: string
+  readonly stake: string | null
+  readonly potentialPayout: string | null
+  readonly profitLoss: string | null
+  readonly rejectionReason: string | null
+  readonly submittedAt: string
+  readonly settledAt: string | null
+}
+
+export interface CopySubAccountStatistics {
+  readonly requested: number
+  readonly submitted: number
+  readonly accepted: number
+  readonly rejected: number
+  readonly pending: number
+  readonly open: number
+  readonly won: number
+  readonly lost: number
+  readonly totalStake: string
+  readonly totalProfitLoss: string
+}
+
+export interface CopySubAccount {
+  readonly configuration: CopySubAccountConfiguration
+  readonly state: 'running' | 'paused' | 'stopped' | 'risk_limit_reached'
+  readonly statistics: CopySubAccountStatistics
+  readonly entries: readonly CopyEntry[]
+}
+
+export interface CopyTradingSession {
+  readonly id: string
+  readonly masterAccountId: string
+  readonly state: 'running' | 'paused' | 'stopped' | 'risk_limit_reached'
+  readonly startedAt: string
+  readonly endedAt: string | null
+  readonly subAccounts: readonly CopySubAccount[]
+}
+
 export const tradeStatuses = [
   'pending',
   'open',
@@ -458,6 +543,23 @@ export interface TradeSnapshot {
   readonly profitLoss: string | null
   readonly openedAt: string | null
   readonly closedAt: string | null
+}
+
+export type TradeRecordSource = 'bot' | 'bulk' | 'copy'
+
+export interface TradeRecord extends TradeSnapshot {
+  readonly source: TradeRecordSource
+  readonly sourceReference: string
+  readonly masterAccountId: string | null
+  readonly masterDerivContractId: string | null
+  readonly derivStatus: string
+  readonly entryValue: string | null
+  readonly currentValue: string | null
+  readonly remainingDuration: string | null
+  readonly payout: string | null
+  readonly martingaleStep: number | null
+  readonly bulkRunId: string | null
+  readonly copySessionId: string | null
 }
 
 export interface AccountRiskLimits {

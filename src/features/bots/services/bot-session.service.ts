@@ -9,6 +9,7 @@ import {
   BotSignal,
   BotStatistics,
   BotTrade,
+  MasterAcceptedTrade,
   MarketTick,
   OpenContractSummary,
   SavedBotConfiguration
@@ -87,6 +88,8 @@ export interface AcceptedBotSignalEvent {
   readonly derivSessionId: string
   readonly session: BotSession
   readonly signal: BotSignal
+  readonly trade: BotTrade
+  readonly masterTrade: MasterAcceptedTrade
 }
 
 export class BotSessionService {
@@ -459,10 +462,30 @@ export class BotSessionService {
       }
     })
     for (const listener of this.acceptedSignalListeners) {
+      const masterTrade: MasterAcceptedTrade = {
+        derivSessionId: session.derivSessionId,
+        source: 'bot',
+        sourceReference: session.id,
+        accountId: session.accountId,
+        currency: session.currency,
+        derivContractId: trade.derivContractId,
+        market: trade.market,
+        contractType: trade.contractType,
+        prediction: trade.prediction,
+        barrier: session.configuration.barrier,
+        duration: session.configuration.duration,
+        durationUnit: session.configuration.durationUnit,
+        stake: trade.stake,
+        potentialPayout: trade.potentialPayout,
+        martingaleStep: trade.martingaleStep,
+        acceptedAt: now
+      }
       listener({
         derivSessionId: session.derivSessionId,
         session: this.toView(session),
-        signal: session.currentSignal
+        signal: session.currentSignal,
+        trade,
+        masterTrade
       })
     }
   }

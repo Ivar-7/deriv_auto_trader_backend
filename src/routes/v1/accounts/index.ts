@@ -1,4 +1,9 @@
-import { FastifyPluginAsync, FastifySchema } from 'fastify'
+import {
+  FastifyInstance,
+  FastifyPluginAsync,
+  FastifyRequest,
+  FastifySchema
+} from 'fastify'
 import { AppError } from '../../../errors/app-error'
 import { apiErrorSchema, getDerivSessionId } from '../deriv-session'
 
@@ -8,6 +13,10 @@ type SelectAccountBody = {
 
 type DisconnectBody = {
   accountId?: string
+}
+
+type DisclosureAcceptanceBody = {
+  accepted: true
 }
 
 const accountSchema = {
@@ -83,6 +92,37 @@ const disconnectSchema: FastifySchema = {
     properties: { accountId: { type: 'string', minLength: 1 } }
   },
   ...sessionResponseSchema
+}
+
+const disclosureSchema = {
+  type: 'object',
+  required: [
+    'accountId',
+    'accountKind',
+    'disclosureVersion',
+    'accepted',
+    'acceptedAt'
+  ],
+  properties: {
+    accountId: { type: 'string' },
+    accountKind: { type: 'string', enum: ['demo', 'real'] },
+    disclosureVersion: { type: 'string' },
+    accepted: { type: 'boolean' },
+    acceptedAt: { type: ['string', 'null'], format: 'date-time' }
+  }
+} as const
+
+const disclosureResponseSchema: FastifySchema = {
+  response: {
+    200: {
+      type: 'object',
+      required: ['data'],
+      properties: { data: disclosureSchema }
+    },
+    400: apiErrorSchema,
+    401: apiErrorSchema,
+    404: apiErrorSchema
+  }
 }
 
 const reconciliationSchema: FastifySchema = {
@@ -214,6 +254,34 @@ const accountRoutes: FastifyPluginAsync = async (fastify): Promise<void> => {
   )
 
   fastify.get(
+    '/disclosure',
+    { schema: disclosureResponseSchema },
+    async (request) => {
+      const account = getSelectedAccount(fastify, request)
+      return { data: fastify.disclosure.getStatus(account) }
+    }
+  )
+
+  fastify.post<{ Body: DisclosureAcceptanceBody }>(
+    '/disclosure/accept',
+    {
+      schema: {
+        body: {
+          type: 'object',
+          required: ['accepted'],
+          additionalProperties: false,
+          properties: { accepted: { type: 'boolean', const: true } }
+        },
+        ...disclosureResponseSchema
+      }
+    },
+    async (request) => {
+      const account = getSelectedAccount(fastify, request)
+      return { data: fastify.disclosure.accept(account) }
+    }
+  )
+
+  fastify.get(
     '/reconciliation',
     { schema: reconciliationSchema },
     async (request) => {
@@ -244,6 +312,38 @@ const accountRoutes: FastifyPluginAsync = async (fastify): Promise<void> => {
       return { data: reconciliation }
     }
   )
+}
+
+function getSelectedAccount(fastify: FastifyInstance, request: FastifyRequest) {
+  const sessionId = getDerivSessionId(request)
+  const session = fastify.deriv.sessions.getSessionView(sessionId)
+
+  if (session === null) {
+    throw new AppError(
+      401,
+      'SESSION_NOT_FOUND',
+      'Your Deriv session is no longer available. Log in again.'
+    )
+  }
+  if (session.selectedAccountId === null) {
+    throw new AppError(
+      400,
+      'ACCOUNT_NOT_SELECTED',
+      'Select an account before reviewing the risk disclosure.'
+    )
+  }
+
+  const account = session.accounts.find(
+    (candidate) => candidate.accountId === session.selectedAccountId
+  )
+  if (account === undefined) {
+    throw new AppError(
+      404,
+      'ACCOUNT_NOT_FOUND',
+      'The selected account is no longer available.'
+    )
+  }
+  return account
 }
 
 export default accountRoutes

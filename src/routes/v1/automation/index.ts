@@ -8,6 +8,7 @@ import { AppError } from '../../../errors/app-error'
 import {
   AccountRiskLimits,
   AutomationCycle,
+  AuthorizedAccount,
   ContractProposalInput,
   SessionRiskLimits,
   TrackedContract
@@ -335,6 +336,7 @@ const automationRoutes: FastifyPluginAsync = async (fastify): Promise<void> => {
     },
     async (request) => {
       const context = getAccountContext(fastify, request)
+      fastify.disclosure.requireAccepted(context.account)
       const session = fastify.automation.sessions.start(
         context.accountId,
         request.body.previewId,
@@ -597,6 +599,7 @@ function getAccountContext(
 ): {
   sessionId: string
   accountId: string
+  account: AuthorizedAccount
   activeContracts: number
   runningProfitLoss: string
   contracts: readonly TrackedContract[]
@@ -656,6 +659,7 @@ function getAccountContext(
   return {
     sessionId,
     accountId: session.selectedAccountId,
+    account: selectedAccount(session),
     activeContracts: contracts.filter(
       (contract) =>
         contract.platformStatus === 'open' ||
@@ -665,6 +669,23 @@ function getAccountContext(
     contracts,
     cycle
   }
+}
+
+function selectedAccount(session: {
+  readonly accounts: readonly AuthorizedAccount[]
+  readonly selectedAccountId: string | null
+}): AuthorizedAccount {
+  const account = session.accounts.find(
+    (candidate) => candidate.accountId === session.selectedAccountId
+  )
+  if (account === undefined) {
+    throw new AppError(
+      404,
+      'ACCOUNT_NOT_FOUND',
+      'The selected account is no longer available.'
+    )
+  }
+  return account
 }
 
 function evaluateRiskOrRecord(

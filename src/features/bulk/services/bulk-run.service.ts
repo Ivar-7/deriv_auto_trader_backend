@@ -11,6 +11,7 @@ import {
   BulkRunEntry,
   BulkRunStatistics,
   BulkSource,
+  MasterAcceptedTrade,
   OpenContractSummary
 } from '../../../shared/contracts'
 import { ActivityLogService } from '../../automation/services/activity-log.service'
@@ -79,9 +80,17 @@ export interface StartBulkRunInput {
   readonly configuration: BulkRunConfiguration
 }
 
+export interface BulkEntryAcceptedEvent {
+  readonly run: BulkRun
+  readonly masterTrade: MasterAcceptedTrade
+}
+
 export class BulkRunService {
   private readonly runs = new Map<string, StoredBulkRun>()
   private readonly profiles = new Map<string, AutoBulkProfile>()
+  private readonly acceptedEntryListeners = new Set<
+    (event: BulkEntryAcceptedEvent) => void
+  >()
 
   public constructor(
     private readonly risks: RiskLimitsService,
@@ -186,6 +195,13 @@ export class BulkRunService {
     const run = this.getStored(accountId, runId)
     await this.processNext(run)
     return this.toView(run)
+  }
+
+  public onEntryAccepted(
+    listener: (event: BulkEntryAcceptedEvent) => void
+  ): () => void {
+    this.acceptedEntryListeners.add(listener)
+    return () => this.acceptedEntryListeners.delete(listener)
   }
 
   public saveAutoProfile(
@@ -431,6 +447,27 @@ export class BulkRunService {
         stake: accepted.stake
       }
     })
+    const masterTrade: MasterAcceptedTrade = {
+      derivSessionId: run.derivSessionId,
+      source: 'bulk',
+      sourceReference: run.id,
+      accountId: run.accountId,
+      currency: run.currency,
+      derivContractId: buy.data.buy.contract_id,
+      market: run.configuration.market,
+      contractType: contractTypeFor(run.configuration.outcome),
+      prediction: run.configuration.outcome,
+      barrier: run.configuration.barrier,
+      duration: run.configuration.duration,
+      durationUnit: run.configuration.durationUnit,
+      stake: accepted.stake,
+      potentialPayout: accepted.potentialPayout,
+      martingaleStep: null,
+      acceptedAt: new Date().toISOString()
+    }
+    for (const listener of this.acceptedEntryListeners) {
+      listener({ run: this.toView(run), masterTrade })
+    }
   }
 
   private updateContract(

@@ -5,7 +5,7 @@ import {
   FastifySchema
 } from 'fastify'
 import { AppError } from '../../../errors/app-error'
-import { BotConfiguration } from '../../../shared/contracts'
+import { AuthorizedAccount, BotConfiguration } from '../../../shared/contracts'
 import { apiErrorSchema, getDerivSessionId } from '../deriv-session'
 
 type ConfigurationBody = { name: string; configuration: BotConfiguration }
@@ -410,6 +410,7 @@ const botRoutes: FastifyPluginAsync = async (fastify): Promise<void> => {
           'Connect the selected account before starting a bot.'
         )
       }
+      fastify.disclosure.requireAccepted(context.account)
       let configuration: BotConfiguration
       let configurationId: string | null = null
       if (
@@ -509,7 +510,7 @@ function getContext(
 ): {
   sessionId: string
   accountId: string
-  account: { accountId: string; currency: string; connectionState: string }
+  account: AuthorizedAccount
 } {
   const sessionId = getDerivSessionId(request)
   const session = fastify.deriv.sessions.getSessionView(sessionId)

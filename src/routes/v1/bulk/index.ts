@@ -6,6 +6,7 @@ import {
 } from 'fastify'
 import { AppError } from '../../../errors/app-error'
 import {
+  AuthorizedAccount,
   AutoBulkProfile,
   BulkRunConfiguration
 } from '../../../shared/contracts'
@@ -248,6 +249,7 @@ const bulkRoutes: FastifyPluginAsync = async (fastify): Promise<void> => {
     async (request) => {
       const selected = context(fastify, request)
       requireConnection(selected.account.connectionState)
+      fastify.disclosure.requireAccepted(selected.account)
       return {
         data: fastify.bulk.runs.start({
           derivSessionId: selected.sessionId,
@@ -346,7 +348,7 @@ function context(
 ): {
   sessionId: string
   accountId: string
-  account: { currency: string; balance: string | null; connectionState: string }
+  account: AuthorizedAccount
 } {
   const sessionId = getDerivSessionId(request)
   const session = fastify.deriv.sessions.getSessionView(sessionId)
