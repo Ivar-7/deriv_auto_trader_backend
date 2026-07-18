@@ -1,6 +1,6 @@
 # Deriv Auto Trader API
 
-Phases Zero through Two establish a typed Fastify service, validated configuration, PostgreSQL migration runner, authorized Deriv account connections, and an account-bound automation safety layer.
+Phases Zero through Four establish a typed Fastify service, validated configuration, PostgreSQL migration runner, authorized Deriv account connections, an account-bound automation safety layer, public market analysis, and live single-bot sessions.
 
 ## Setup
 
@@ -19,3 +19,9 @@ The public health check is available at `GET /api/v1/health`.
 Phase One exposes `POST /api/v1/auth/deriv/login`, `GET /api/v1/auth/deriv/callback`, `GET /api/v1/accounts/session`, and account selection, refresh, disconnect, and logout routes under `/api/v1/accounts`.
 
 Phase Two adds account-scoped routes under `/api/v1/automation` for guarded contract previews, session state transitions, open-contract status, account-cycle P/L, risk limits, Emergency Stop, and Activity Log entries. A proposal is required before a session can start; this phase does not submit a Deriv `buy` request.
+
+Phase Three adds account-scoped, read-only market routes under `/api/v1/markets`. They manage public tick subscriptions and return explicit data health, bounded tick buffers, digit and movement observations, streaks, and scanner deviations. Market observations do not initiate trades.
+
+Phase Four adds account-scoped bot routes under `/api/v1/bots`. They save reusable Rise/Fall, Over/Under, Even/Odd, Matches/Differs, and Smart Auto Trader configurations; evaluate live ticks; submit accepted Deriv proposals and buys with an idempotency ledger; track settlement statistics; enforce account/session/martingale limits; and record meaningful Smart No Signal transitions. Pause and Stop prevent new entries only and never sell an open contract.
+
+Phase Five adds scanner routes under `/api/v1/scanner` and bulk routes under `/api/v1/bulk`. Scanner discovery reads Deriv-supported volatility symbols, ranks observed Differs deviations, and requires three matching completed evaluations before scanner-triggered Auto Bulk. The shared bulk engine submits fixed-stake entries sequentially, respects active-contract and P/L limits, never uses martingale, retains settlement statistics, and cancels only unsubmitted entries on Stop. Enabled profiles may also start a bulk run from an accepted Smart signal.

@@ -74,8 +74,17 @@ interface PendingRequest {
   readonly timeout: NodeJS.Timeout
 }
 
+export interface ContractUpdateEvent {
+  readonly sessionId: string
+  readonly accountId: string
+  readonly contract: OpenContractSummary
+}
+
 export class AccountConnectionManager {
   private readonly connections = new Map<string, LiveConnection>()
+  private readonly contractUpdateListeners = new Set<
+    (event: ContractUpdateEvent) => void
+  >()
 
   public constructor(
     private readonly sessionStore: DerivSessionStore,
@@ -216,6 +225,13 @@ export class AccountConnectionManager {
 
       connection.socket?.send(JSON.stringify({ ...request, req_id: requestId }))
     })
+  }
+
+  public onContractUpdate(
+    listener: (event: ContractUpdateEvent) => void
+  ): () => void {
+    this.contractUpdateListeners.add(listener)
+    return () => this.contractUpdateListeners.delete(listener)
   }
 
   public closeAll(): void {
@@ -440,6 +456,7 @@ export class AccountConnectionManager {
       return
     }
 
+    const summary = this.toOpenContractSummary(contract.data)
     const isSettled =
       contract.data.is_sold === true || contract.data.is_sold === 1
 
@@ -449,14 +466,18 @@ export class AccountConnectionManager {
       }
       this.recordSettlement(connection, contract.data)
     } else {
-      connection.openContracts.set(
-        contract.data.contract_id,
-        this.toOpenContractSummary(contract.data)
-      )
+      connection.openContracts.set(contract.data.contract_id, summary)
     }
 
     connection.reconciledAt = new Date().toISOString()
     this.storeReconciliation(connection)
+    for (const listener of this.contractUpdateListeners) {
+      listener({
+        sessionId: connection.sessionId,
+        accountId: connection.accountId,
+        contract: summary
+      })
+    }
   }
 
   private toOpenContractSummary(

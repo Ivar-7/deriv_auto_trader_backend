@@ -9,9 +9,16 @@ import errorHandler from './plugins/error-handler'
 import sensible from './plugins/sensible'
 import rootRoutes from './routes/root'
 import healthRoutes from './routes/v1/health'
+import marketRoutes from './routes/v1/markets'
+import marketData from './plugins/market-data'
+import bots from './plugins/bots'
+import bulk from './plugins/bulk'
 import authRoutes from './routes/v1/auth'
 import accountRoutes from './routes/v1/accounts'
 import automationRoutes from './routes/v1/automation'
+import botRoutes from './routes/v1/bots'
+import bulkRoutes from './routes/v1/bulk'
+import scannerRoutes from './routes/v1/scanner'
 
 export type AppOptions = FastifyServerOptions
 
@@ -25,12 +32,19 @@ const app: FastifyPluginAsync<AppOptions> = async (fastify): Promise<void> => {
   await fastify.register(database)
   await fastify.register(deriv)
   await fastify.register(automation)
+  await fastify.register(marketData)
+  await fastify.register(bots)
+  await fastify.register(bulk)
   await fastify.register(errorHandler)
   await fastify.register(rootRoutes)
   await fastify.register(healthRoutes, { prefix: '/api/v1' })
   await fastify.register(authRoutes, { prefix: '/api/v1/auth/deriv' })
   await fastify.register(accountRoutes, { prefix: '/api/v1/accounts' })
   await fastify.register(automationRoutes, { prefix: '/api/v1/automation' })
+  await fastify.register(marketRoutes, { prefix: '/api/v1/markets' })
+  await fastify.register(botRoutes, { prefix: '/api/v1/bots' })
+  await fastify.register(bulkRoutes, { prefix: '/api/v1/bulk' })
+  await fastify.register(scannerRoutes, { prefix: '/api/v1/scanner' })
 }
 
 export default app

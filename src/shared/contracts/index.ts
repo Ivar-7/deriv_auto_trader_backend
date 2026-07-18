@@ -121,6 +121,315 @@ export interface MarketTick {
   readonly digit: number
   readonly direction: TickDirection
   readonly latencyMs: number | null
+  readonly receivedAt: string
+}
+
+export const marketDataStates = [
+  'idle',
+  'connecting',
+  'live',
+  'stale',
+  'disconnected',
+  'error'
+] as const
+export type MarketDataState = (typeof marketDataStates)[number]
+
+export interface MarketDataHealth {
+  readonly state: MarketDataState
+  readonly lastTickAt: string | null
+  readonly latencyMs: number | null
+  readonly movementBufferSize: number
+  readonly digitBufferSize: number
+}
+
+export interface DigitBoardCell {
+  readonly digit: number
+  readonly count: number
+  readonly observedPercentage: number
+  readonly isLatest: boolean
+}
+
+export interface MovementObservation {
+  readonly rising: number
+  readonly falling: number
+  readonly neutral: number
+  readonly directionalCount: number
+  readonly risingConfidence: number | null
+  readonly fallingConfidence: number | null
+  readonly dominantDirection: Exclude<TickDirection, 'neutral'> | null
+  readonly dominantConfidence: number | null
+  readonly meetsConfiguredThreshold: boolean
+}
+
+export interface DigitObservation {
+  readonly sampleSize: number
+  readonly evenCount: number
+  readonly oddCount: number
+  readonly overCount: number
+  readonly underCount: number
+  readonly equalToBarrierCount: number
+  readonly matchesCount: number
+  readonly differsCount: number
+  readonly evenObservedPercentage: number | null
+  readonly oddObservedPercentage: number | null
+  readonly overObservedPercentage: number | null
+  readonly underObservedPercentage: number | null
+  readonly equalToBarrierObservedPercentage: number | null
+  readonly matchesObservedPercentage: number | null
+  readonly differsObservedPercentage: number | null
+}
+
+export interface MarketStreaks {
+  readonly direction: {
+    readonly direction: TickDirection
+    readonly length: number
+  } | null
+  readonly digit: { readonly digit: number; readonly length: number } | null
+}
+
+export interface AnalysisParameters {
+  readonly movementWindow: number
+  readonly digitWindow: number
+  readonly barrier: number
+  readonly confidenceThreshold: number
+}
+
+export interface MarketAnalysis {
+  readonly market: string
+  readonly health: MarketDataHealth
+  readonly latestTick: MarketTick | null
+  readonly recentTicks: readonly MarketTick[]
+  readonly movement: MovementObservation
+  readonly digitBoard: readonly DigitBoardCell[]
+  readonly digits: DigitObservation
+  readonly streaks: MarketStreaks
+  readonly parameters: AnalysisParameters
+  readonly updatedAt: string
+}
+
+export interface MarketScannerObservation {
+  readonly market: string
+  readonly dataState: MarketDataState
+  readonly proposedDigit: number | null
+  readonly proposedDigitCount: number
+  readonly longestAbsence: number
+  readonly observedDiffersPercentage: number | null
+  readonly theoreticalBaseline: number
+  readonly normalizedDeviation: number | null
+}
+
+export const botTypes = [
+  'rise_fall',
+  'over_under',
+  'even_odd',
+  'matches_differs',
+  'smart_auto'
+] as const
+export type BotType = (typeof botTypes)[number]
+
+export const botOutcomes = [
+  'rise',
+  'fall',
+  'over',
+  'under',
+  'even',
+  'odd',
+  'matches',
+  'differs',
+  'no_signal'
+] as const
+export type BotOutcome = (typeof botOutcomes)[number]
+
+export interface MartingaleSettings {
+  readonly enabled: boolean
+  readonly multiplier: string
+  readonly maxSteps: number
+  readonly maxStake: string | null
+  readonly resetAfterWin: boolean
+  readonly resetAtSessionEnd: boolean
+}
+
+export interface BotSessionLimits {
+  readonly stopLoss: string | null
+  readonly takeProfit: string | null
+  readonly maximumTrades: number | null
+  readonly maximumConsecutiveLosses: number | null
+  readonly maximumSingleStake: string | null
+  readonly maximumCumulativeStake: string | null
+}
+
+export interface BotConfiguration {
+  readonly botType: BotType
+  readonly market: string
+  readonly outcome: Exclude<BotOutcome, 'no_signal'> | null
+  readonly barrier: number | null
+  readonly stake: string
+  readonly duration: number
+  readonly durationUnit: 't' | 's' | 'm' | 'h' | 'd'
+  readonly movementWindow: number
+  readonly digitWindow: number
+  readonly confidenceThreshold: number
+  readonly minimumSignalStrength: number
+  readonly entryDelaySeconds: number
+  readonly martingale: MartingaleSettings
+  readonly limits: BotSessionLimits
+}
+
+export interface SavedBotConfiguration {
+  readonly id: string
+  readonly accountId: string
+  readonly name: string
+  readonly configuration: BotConfiguration
+  readonly createdAt: string
+  readonly updatedAt: string
+}
+
+export interface BotSignal {
+  readonly outcome: BotOutcome
+  readonly observedConfidence: number | null
+  readonly theoreticalBaseline: number | null
+  readonly signalStrength: number | null
+  readonly reason: string
+  readonly evaluatedAt: string
+}
+
+export interface MartingaleState {
+  readonly step: number
+  readonly nextStake: string
+  readonly lastTransition:
+    | 'initial'
+    | 'advanced_after_loss'
+    | 'reset_after_win'
+    | 'reset_at_session_end'
+}
+
+export interface BotStatistics {
+  readonly submittedTrades: number
+  readonly acceptedTrades: number
+  readonly openTrades: number
+  readonly wonTrades: number
+  readonly lostTrades: number
+  readonly consecutiveLosses: number
+  readonly totalStake: string
+  readonly totalProfitLoss: string
+}
+
+export interface BotTrade extends TradeSnapshot {
+  readonly outcome: Exclude<BotOutcome, 'no_signal'>
+  readonly martingaleStep: number
+  readonly submissionReference: string
+}
+
+export interface BotSession {
+  readonly id: string
+  readonly configurationId: string | null
+  readonly accountId: string
+  readonly currency: string
+  readonly configuration: BotConfiguration
+  readonly state: AutomationSessionState
+  readonly startedAt: string | null
+  readonly endedAt: string | null
+  readonly currentSignal: BotSignal
+  readonly martingale: MartingaleState
+  readonly statistics: BotStatistics
+  readonly trades: readonly BotTrade[]
+}
+
+export interface ScannerMarket {
+  readonly symbol: string
+  readonly displayName: string
+  readonly market: string
+  readonly submarket: string
+}
+
+export interface DiffersScannerResult extends MarketScannerObservation {
+  readonly confirmationCount: number
+  readonly confirmationState: 'monitoring' | 'confirmed'
+  readonly minimumSignalStrength: number
+  readonly qualifiesForExecution: boolean
+  readonly evaluatedAt: string
+}
+
+export type BulkSource = 'manual' | 'smart' | 'scanner'
+
+export interface BulkRunConfiguration {
+  readonly market: string
+  readonly outcome: 'differs' | 'matches' | 'over' | 'under' | 'rise' | 'fall'
+  readonly barrier: number | null
+  readonly stake: string
+  readonly duration: number
+  readonly durationUnit: 't' | 's' | 'm' | 'h' | 'd'
+  readonly count: number
+  readonly entryDelaySeconds: number
+  readonly maximumActiveContracts: number
+  readonly stopLoss: string | null
+  readonly takeProfit: string | null
+}
+
+export interface BulkRunStatistics {
+  readonly requested: number
+  readonly submitted: number
+  readonly accepted: number
+  readonly rejected: number
+  readonly pending: number
+  readonly open: number
+  readonly won: number
+  readonly lost: number
+  readonly cancelledBeforeSubmission: number
+  readonly totalStake: string
+  readonly totalPayout: string
+  readonly totalProfitLoss: string
+}
+
+export type BulkEntryStatus =
+  | 'requested'
+  | 'submitted'
+  | 'accepted'
+  | 'rejected'
+  | 'pending'
+  | 'open'
+  | 'won'
+  | 'lost'
+  | 'cancelled_before_submission'
+
+export interface BulkRunEntry {
+  readonly id: string
+  readonly sequence: number
+  readonly derivContractId: string | null
+  readonly status: BulkEntryStatus
+  readonly stake: string
+  readonly potentialPayout: string | null
+  readonly profitLoss: string | null
+  readonly rejectionReason: string | null
+  readonly submittedAt: string | null
+  readonly settledAt: string | null
+}
+
+export interface BulkRun {
+  readonly id: string
+  readonly accountId: string
+  readonly currency: string
+  readonly source: BulkSource
+  readonly sourceReference: string | null
+  readonly configuration: BulkRunConfiguration
+  readonly state: AutomationSessionState
+  readonly startedAt: string | null
+  readonly endedAt: string | null
+  readonly statistics: BulkRunStatistics
+  readonly entries: readonly BulkRunEntry[]
+}
+
+export interface AutoBulkProfile {
+  readonly id: string
+  readonly accountId: string
+  readonly enabled: boolean
+  readonly market: string | null
+  readonly configuration: Omit<
+    BulkRunConfiguration,
+    'market' | 'outcome' | 'barrier'
+  >
+  readonly createdAt: string
+  readonly updatedAt: string
 }
 
 export const tradeStatuses = [
