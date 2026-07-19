@@ -8,6 +8,8 @@ Copy `.env.example` to `.env` and set the frontend origin, CORS origin, PostgreS
 
 The server binds to `0.0.0.0` and reads the standard platform `PORT` directly at runtime. Do not set `HOST` or `PORT` in `.env` or DigitalOcean; App Platform supplies the listener port automatically.
 
+For DigitalOcean App Platform, set the build command to `npm run build` and the run command to `npm run db:migrate:production && npm start`. The production migration and server commands execute compiled JavaScript only, so they do not require `ts-node` or any other development dependency at runtime.
+
 The OAuth callback must be registered in Deriv exactly as `DERIV_OAUTH_REDIRECT_URI`. The server uses Authorization Code + PKCE, exchanges the code server-side, and keeps the access token only in the server-side session store. It never receives a Deriv password.
 
 ## Commands

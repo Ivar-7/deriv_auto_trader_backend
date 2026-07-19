@@ -13,9 +13,10 @@
     "watch:ts": "tsc -w",
     "dev": "npm run build:ts && concurrently -k -p \"[{name}]\" -n \"TypeScript,App\" -c \"yellow.bold,cyan.bold\" \"npm:watch:ts\" \"npm:dev:start\"",
     "dev:start": "node --watch dist/server.js",
+    "db:migrate:production": "node dist/scripts/migrate.js",
     "format": "prettier --write .",
     "lint": "eslint .",
-    "start": "npm run build:ts && node dist/server.js",
+    "start": "node dist/server.js",
     "test": "npm run build:ts && tsc -p test/tsconfig.json && c8 node --test -r ts-node/register \"test/**/*.test.ts\"",
     "typecheck": "tsc --noEmit"
   },
