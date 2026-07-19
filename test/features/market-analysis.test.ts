@@ -175,6 +175,56 @@ test('converts received ticks into live analysis data without a trade connection
   assert.strictEqual(analysis.latestTick?.digit, 1)
   assert.strictEqual(analysis.movement.rising, 1)
   assert.strictEqual(analysis.digits.sampleSize, 2)
+  assert.strictEqual(analysis.recentTicks.length, 2)
+})
+
+test('hydrates real historical candles and keeps the current candle live', async () => {
+  const socket = new FakeMarketSocket()
+  const markets = new MarketDataService(
+    { derivApiBaseUrl: 'https://api.derivws.com' },
+    { info: () => undefined, warn: () => undefined },
+    () => socket as unknown as WebSocket
+  )
+
+  markets.subscribe('R_100')
+  await new Promise<void>((resolve) => setImmediate(resolve))
+
+  socket.emit(
+    'message',
+    Buffer.from(
+      JSON.stringify({
+        msg_type: 'candles',
+        req_id: 201,
+        candles: [
+          {
+            epoch: 1_699_999_980,
+            open: 100.1,
+            high: 100.4,
+            low: 100,
+            close: 100.3
+          }
+        ]
+      })
+    )
+  )
+
+  markets.recordTick('R_100', {
+    epoch: 1_700_000_020,
+    quote: '100.500',
+    pipSize: 3
+  })
+
+  const analysis = markets.getAnalysis('R_100', {
+    movementWindow: 20,
+    digitWindow: 100,
+    barrier: 5,
+    confidenceThreshold: 0.6
+  })
+
+  assert.strictEqual(analysis.candles.oneMinute.length, 1)
+  assert.strictEqual(analysis.candles.oneMinute[0]?.open, '100.1')
+  assert.strictEqual(analysis.candles.oneMinute[0]?.high, '100.500')
+  assert.strictEqual(analysis.candles.oneMinute[0]?.close, '100.500')
 })
 
 test('replaces a stale open market socket when a feed is requested again', () => {

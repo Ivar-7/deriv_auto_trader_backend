@@ -72,6 +72,28 @@ const healthSchema = {
   }
 } as const
 
+const candleSchema = {
+  type: 'object',
+  required: ['epoch', 'open', 'high', 'low', 'close'],
+  properties: {
+    epoch: { type: 'integer', minimum: 0 },
+    open: { type: 'string' },
+    high: { type: 'string' },
+    low: { type: 'string' },
+    close: { type: 'string' }
+  }
+} as const
+
+const candleHistorySchema = {
+  type: 'object',
+  required: ['oneMinute', 'fiveMinutes', 'oneHour'],
+  properties: {
+    oneMinute: { type: 'array', items: candleSchema },
+    fiveMinutes: { type: 'array', items: candleSchema },
+    oneHour: { type: 'array', items: candleSchema }
+  }
+} as const
+
 const analysisSchema = {
   type: 'object',
   required: [
@@ -79,6 +101,7 @@ const analysisSchema = {
     'health',
     'latestTick',
     'recentTicks',
+    'candles',
     'movement',
     'digitBoard',
     'digits',
@@ -91,6 +114,7 @@ const analysisSchema = {
     health: healthSchema,
     latestTick: { anyOf: [tickSchema, { type: 'null' }] },
     recentTicks: { type: 'array', items: tickSchema },
+    candles: candleHistorySchema,
     movement: {
       type: 'object',
       required: [

@@ -26,6 +26,7 @@ const analysis: MarketAnalysis = {
   },
   latestTick: null,
   recentTicks: [],
+  candles: { oneMinute: [], fiveMinutes: [], oneHour: [] },
   movement: {
     rising: 20,
     falling: 10,

@@ -5,6 +5,8 @@ import { AppError } from '../../../errors/app-error'
 import {
   AnalysisParameters,
   MarketAnalysis,
+  MarketCandle,
+  MarketCandleHistory,
   MarketDataHealth,
   MarketDataState,
   MarketScannerObservation,
@@ -21,11 +23,13 @@ import {
   RollingTickBuffer
 } from './market-analysis.service'
 
+const quoteValueSchema = z.union([z.string(), z.number()]).transform(String)
+
 const tickMessageSchema = z.object({
   msg_type: z.literal('tick'),
   tick: z.object({
     epoch: z.coerce.number().int().nonnegative(),
-    quote: z.union([z.string(), z.number()]).transform(String),
+    quote: quoteValueSchema,
     symbol: z.string().min(1),
     pip_size: z.coerce.number().int().min(0).max(12).optional()
   })
@@ -33,12 +37,50 @@ const tickMessageSchema = z.object({
 
 const websocketErrorSchema = z.object({
   msg_type: z.string(),
+  req_id: z.coerce.number().int().optional(),
   error: z.object({ code: z.string().optional() }).optional()
 })
+
+const tickHistoryMessageSchema = z.object({
+  msg_type: z.literal('history'),
+  history: z.object({
+    prices: z.array(quoteValueSchema),
+    times: z.array(z.coerce.number().int().nonnegative())
+  }),
+  pip_size: z.coerce.number().int().min(0).max(12).optional()
+})
+
+const candleHistoryMessageSchema = z.object({
+  msg_type: z.literal('candles'),
+  req_id: z.coerce.number().int(),
+  candles: z.array(
+    z.object({
+      epoch: z.coerce.number().int().nonnegative(),
+      open: quoteValueSchema,
+      high: quoteValueSchema,
+      low: quoteValueSchema,
+      close: quoteValueSchema
+    })
+  )
+})
+
+const tickHistoryRequestId = 101
+const candleHistoryRequests = [
+  { requestId: 201, key: 'oneMinute', granularity: 60 },
+  { requestId: 202, key: 'fiveMinutes', granularity: 300 },
+  { requestId: 203, key: 'oneHour', granularity: 3_600 }
+] as const
+
+type CandleHistoryKey = (typeof candleHistoryRequests)[number]['key']
+
+function emptyCandleHistory(): MarketCandleHistory {
+  return { oneMinute: [], fiveMinutes: [], oneHour: [] }
+}
 
 interface MarketStream {
   readonly market: string
   readonly buffer: RollingTickBuffer
+  candleHistory: MarketCandleHistory
   socket: WebSocket | null
   state: MarketDataState
   lastTickAt: string | null
@@ -102,7 +144,8 @@ export class MarketDataService {
       market,
       health,
       latestTick: stream.buffer.latest(),
-      recentTicks: stream.buffer.values(20),
+      recentTicks: stream.buffer.values(parameters.digitWindow),
+      candles: stream.candleHistory,
       movement: {
         ...movement,
         meetsConfiguredThreshold:
@@ -167,7 +210,29 @@ export class MarketDataService {
       await this.waitForOpen(socket)
       stream.reconnectAttempt = 0
       stream.state = 'connecting'
-      socket.send(JSON.stringify({ ticks: stream.market, subscribe: 1 }))
+      socket.send(
+        JSON.stringify({
+          ticks_history: stream.market,
+          end: 'latest',
+          style: 'ticks',
+          count: 500,
+          subscribe: 1,
+          req_id: tickHistoryRequestId
+        })
+      )
+      for (const request of candleHistoryRequests) {
+        socket.send(
+          JSON.stringify({
+            ticks_history: stream.market,
+            end: 'latest',
+            style: 'candles',
+            count: 160,
+            granularity: request.granularity,
+            subscribe: 0,
+            req_id: request.requestId
+          })
+        )
+      }
     } catch {
       this.logger.warn({ market: stream.market }, 'Deriv market stream failed')
       this.handleDisconnected(stream)
@@ -208,7 +273,55 @@ export class MarketDataService {
     const errorMessage = websocketErrorSchema.safeParse(json)
 
     if (errorMessage.success && errorMessage.data.error !== undefined) {
+      const requestId = errorMessage.data.req_id
+
+      if (
+        candleHistoryRequests.some((request) => request.requestId === requestId)
+      ) {
+        this.logger.warn(
+          { market: stream.market, requestId },
+          'Deriv candle history request failed'
+        )
+        return
+      }
+
+      if (requestId === tickHistoryRequestId && stream.socket !== null) {
+        this.logger.warn(
+          { market: stream.market },
+          'Deriv tick history request failed; using live ticks only'
+        )
+        stream.socket.send(
+          JSON.stringify({ ticks: stream.market, subscribe: 1 })
+        )
+        return
+      }
+
       stream.state = 'error'
+      return
+    }
+
+    const historyMessage = tickHistoryMessageSchema.safeParse(json)
+
+    if (historyMessage.success) {
+      this.recordTickHistory(
+        stream,
+        historyMessage.data.history.times,
+        historyMessage.data.history.prices,
+        historyMessage.data.pip_size ?? null
+      )
+      return
+    }
+
+    const candleMessage = candleHistoryMessageSchema.safeParse(json)
+
+    if (candleMessage.success) {
+      const request = candleHistoryRequests.find(
+        (candidate) => candidate.requestId === candleMessage.data.req_id
+      )
+
+      if (request !== undefined) {
+        this.setCandleHistory(stream, request.key, candleMessage.data.candles)
+      }
       return
     }
 
@@ -243,6 +356,7 @@ export class MarketDataService {
     stream.lastTickAt = receivedAt.toISOString()
     stream.latencyMs = Math.max(receivedAt.getTime() - input.epoch * 1000, 0)
     stream.state = 'live'
+    this.updateLiveCandles(stream, tick)
     for (const listener of this.tickListeners) {
       listener(tick)
     }
@@ -309,6 +423,7 @@ export class MarketDataService {
     const stream: MarketStream = {
       market,
       buffer: new RollingTickBuffer(),
+      candleHistory: emptyCandleHistory(),
       socket: null,
       state: 'idle',
       lastTickAt: null,
@@ -351,6 +466,7 @@ export class MarketDataService {
       health,
       latestTick: null,
       recentTicks: [],
+      candles: emptyCandleHistory(),
       movement: calculateMovementObservation([]),
       digitBoard: calculateDigitBoard([]),
       digits: calculateDigitObservation([], parameters.barrier),
@@ -367,6 +483,90 @@ export class MarketDataService {
       latencyMs: null,
       movementBufferSize: 0,
       digitBufferSize: 0
+    }
+  }
+
+  private recordTickHistory(
+    stream: MarketStream,
+    epochs: readonly number[],
+    quotes: readonly string[],
+    pipSize: number | null
+  ): void {
+    let latestEpoch = stream.buffer.latest()?.epoch ?? -1
+    const count = Math.min(epochs.length, quotes.length)
+
+    for (let index = 0; index < count; index += 1) {
+      const epoch = epochs[index]
+      const quote = quotes[index]
+
+      if (epoch === undefined || quote === undefined || epoch <= latestEpoch) {
+        continue
+      }
+
+      stream.buffer.append({
+        market: stream.market,
+        epoch,
+        quote,
+        digit: extractLastDigit(quote, pipSize),
+        latencyMs: null,
+        receivedAt: new Date(epoch * 1_000).toISOString()
+      })
+      latestEpoch = epoch
+    }
+  }
+
+  private setCandleHistory(
+    stream: MarketStream,
+    key: CandleHistoryKey,
+    candles: readonly MarketCandle[]
+  ): void {
+    stream.candleHistory = {
+      ...stream.candleHistory,
+      [key]: [...candles].sort((left, right) => left.epoch - right.epoch)
+    }
+  }
+
+  private updateLiveCandles(stream: MarketStream, tick: MarketTick): void {
+    const quote = Number(tick.quote)
+
+    if (!Number.isFinite(quote)) {
+      return
+    }
+
+    for (const request of candleHistoryRequests) {
+      const history = stream.candleHistory[request.key]
+      const epoch =
+        Math.floor(tick.epoch / request.granularity) * request.granularity
+      const latest = history.at(-1)
+      let nextHistory: readonly MarketCandle[]
+
+      if (latest?.epoch === epoch) {
+        const updated: MarketCandle = {
+          ...latest,
+          high: quote > Number(latest.high) ? tick.quote : latest.high,
+          low: quote < Number(latest.low) ? tick.quote : latest.low,
+          close: tick.quote
+        }
+        nextHistory = [...history.slice(0, -1), updated]
+      } else if (latest === undefined || latest.epoch < epoch) {
+        nextHistory = [
+          ...history,
+          {
+            epoch,
+            open: tick.quote,
+            high: tick.quote,
+            low: tick.quote,
+            close: tick.quote
+          }
+        ].slice(-160)
+      } else {
+        continue
+      }
+
+      stream.candleHistory = {
+        ...stream.candleHistory,
+        [request.key]: nextHistory
+      }
     }
   }
 

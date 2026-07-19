@@ -194,11 +194,26 @@ export interface AnalysisParameters {
   readonly confidenceThreshold: number
 }
 
+export interface MarketCandle {
+  readonly epoch: number
+  readonly open: string
+  readonly high: string
+  readonly low: string
+  readonly close: string
+}
+
+export interface MarketCandleHistory {
+  readonly oneMinute: readonly MarketCandle[]
+  readonly fiveMinutes: readonly MarketCandle[]
+  readonly oneHour: readonly MarketCandle[]
+}
+
 export interface MarketAnalysis {
   readonly market: string
   readonly health: MarketDataHealth
   readonly latestTick: MarketTick | null
   readonly recentTicks: readonly MarketTick[]
+  readonly candles: MarketCandleHistory
   readonly movement: MovementObservation
   readonly digitBoard: readonly DigitBoardCell[]
   readonly digits: DigitObservation
