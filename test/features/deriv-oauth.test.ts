@@ -6,8 +6,6 @@ import { DerivOAuthService } from '../../src/features/deriv/services/deriv-oauth
 
 const config: AppConfig = {
   nodeEnv: 'test',
-  host: '127.0.0.1',
-  port: 3000,
   corsOrigin: 'http://localhost:5173',
   databaseUrl:
     'postgresql://postgres:postgres@localhost:5432/deriv_auto_trader_test',

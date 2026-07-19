@@ -3,7 +3,8 @@ import fp from 'fastify-plugin'
 
 export default fp(async (fastify) => {
   await fastify.register(cors, {
-    origin: fastify.config.corsOrigin,
+    origin:
+      fastify.config.corsOrigin === '*' ? true : fastify.config.corsOrigin,
     credentials: true
   })
 })

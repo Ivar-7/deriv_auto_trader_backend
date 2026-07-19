@@ -4,8 +4,6 @@ import { loadAppConfig } from '../../src/config/env'
 
 const validEnvironment = {
   NODE_ENV: 'test',
-  HOST: '127.0.0.1',
-  PORT: '3000',
   CORS_ORIGIN: 'http://localhost:5173',
   DATABASE_URL:
     'postgresql://postgres:postgres@localhost:5432/deriv_auto_trader_test',
@@ -19,7 +17,13 @@ test('loads a valid application environment', () => {
   const config = loadAppConfig(validEnvironment)
 
   assert.strictEqual(config.derivAppId, '1089')
-  assert.strictEqual(config.port, 3000)
+  assert.strictEqual(config.corsOrigin, 'http://localhost:5173')
+})
+
+test('allows a temporary credential-compatible CORS wildcard', () => {
+  const config = loadAppConfig({ ...validEnvironment, CORS_ORIGIN: '*' })
+
+  assert.strictEqual(config.corsOrigin, '*')
 })
 
 test('rejects an unconfigured Deriv App ID', () => {
