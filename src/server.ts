@@ -1,5 +1,6 @@
 import Fastify from 'fastify'
 import app from './app'
+import { loggerOptions } from './lib/logging'
 
 function resolvePort(portValue: string | undefined): number {
   const port = Number(portValue ?? '3000')
@@ -12,7 +13,7 @@ function resolvePort(portValue: string | undefined): number {
 }
 
 async function startServer(): Promise<void> {
-  const server = Fastify({ logger: true })
+  const server = Fastify({ logger: loggerOptions })
   await server.register(app)
 
   const closeServer = async (signal: string): Promise<void> => {
