@@ -3,9 +3,8 @@ import * as test from 'node:test'
 import { build as buildApplication } from 'fastify-cli/helper.js'
 
 process.env.NODE_ENV = 'test'
-process.env.HOST = '127.0.0.1'
-process.env.PORT = '3000'
 process.env.CORS_ORIGIN = 'http://localhost:5173'
+process.env.FRONTEND_ORIGIN = 'http://localhost:5173'
 process.env.DATABASE_URL =
   'postgresql://postgres:postgres@localhost:5432/deriv_auto_trader_test'
 process.env.DERIV_APP_ID = '1089'

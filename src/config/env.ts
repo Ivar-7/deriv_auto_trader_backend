@@ -13,6 +13,7 @@ const appConfigSchema = z.object({
     .enum(['development', 'test', 'production'])
     .default('development'),
   CORS_ORIGIN: z.union([z.literal('*'), z.string().url()]),
+  FRONTEND_ORIGIN: z.string().url(),
   DATABASE_URL: z.string().url(),
   DERIV_APP_ID: requiredDerivAppId,
   DERIV_OAUTH_REDIRECT_URI: z.string().url(),
@@ -31,6 +32,7 @@ const appConfigSchema = z.object({
 export type AppConfig = Readonly<{
   nodeEnv: 'development' | 'test' | 'production'
   corsOrigin: string
+  frontendOrigin: string
   databaseUrl: string
   derivAppId: string
   derivOauthRedirectUri: string
@@ -55,6 +57,7 @@ export function loadAppConfig(environment: NodeJS.ProcessEnv): AppConfig {
   return {
     nodeEnv: parsed.data.NODE_ENV,
     corsOrigin: parsed.data.CORS_ORIGIN,
+    frontendOrigin: parsed.data.FRONTEND_ORIGIN,
     databaseUrl: parsed.data.DATABASE_URL,
     derivAppId: parsed.data.DERIV_APP_ID,
     derivOauthRedirectUri: parsed.data.DERIV_OAUTH_REDIRECT_URI,

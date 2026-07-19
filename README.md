@@ -4,7 +4,7 @@ Phases Zero through Four establish a typed Fastify service, validated configurat
 
 ## Setup
 
-Copy `.env.example` to `.env` and set your assigned `DERIV_APP_ID`, matching backend OAuth callback URI, CORS origin, PostgreSQL URL, and a 32-character-or-longer `SESSION_COOKIE_SECRET`. The app refuses to start when any required value is missing or malformed. Deriv credentials are never committed to source control. `CORS_ORIGIN=*` is available only as a temporary setup mode; it reflects the requesting origin so browser session cookies continue to work. Replace it with the deployed frontend URL before release.
+Copy `.env.example` to `.env` and set your assigned `DERIV_APP_ID`, matching backend OAuth callback URI, frontend origin, CORS origin, PostgreSQL URL, and a 32-character-or-longer `SESSION_COOKIE_SECRET`. The app refuses to start when any required value is missing or malformed. Deriv credentials are never committed to source control. `FRONTEND_ORIGIN` is the fixed URL that receives OAuth completion redirects; it must always be a real frontend URL, never `*`. `CORS_ORIGIN=*` is available only as a temporary setup mode; it reflects the requesting origin so browser session cookies continue to work. Replace it with the deployed frontend URL before release.
 
 The server binds to `0.0.0.0` and reads the standard platform `PORT` directly at runtime. Do not set `HOST` or `PORT` in `.env` or DigitalOcean; App Platform supplies the listener port automatically.
 

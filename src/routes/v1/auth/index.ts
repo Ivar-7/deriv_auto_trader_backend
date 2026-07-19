@@ -84,7 +84,7 @@ const authRoutes: FastifyPluginAsync = async (fastify): Promise<void> => {
     '/callback',
     { schema: callbackSchema },
     async (request, reply) => {
-      const redirectUrl = new URL('/accounts', fastify.config.corsOrigin)
+      const redirectUrl = new URL('/accounts', fastify.config.frontendOrigin)
       const expectedState = getDerivOAuthState(request)
       const { code, state, error } = request.query
 

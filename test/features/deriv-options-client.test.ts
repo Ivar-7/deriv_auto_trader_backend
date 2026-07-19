@@ -7,6 +7,7 @@ import { DerivOptionsClient } from '../../src/features/deriv/services/deriv-opti
 const config: AppConfig = {
   nodeEnv: 'test',
   corsOrigin: 'http://localhost:5173',
+  frontendOrigin: 'http://localhost:5173',
   databaseUrl:
     'postgresql://postgres:postgres@localhost:5432/deriv_auto_trader_test',
   derivAppId: '1089',
