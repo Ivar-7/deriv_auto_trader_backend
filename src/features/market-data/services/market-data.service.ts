@@ -65,6 +65,7 @@ const candleHistoryMessageSchema = z.object({
 })
 
 const tickHistoryRequestId = 101
+const liveTickRequestId = 102
 const candleHistoryRequests = [
   { requestId: 201, key: 'oneMinute', granularity: 60 },
   { requestId: 202, key: 'fiveMinutes', granularity: 300 },
@@ -210,16 +211,6 @@ export class MarketDataService {
       await this.waitForOpen(socket)
       stream.reconnectAttempt = 0
       stream.state = 'connecting'
-      socket.send(
-        JSON.stringify({
-          ticks_history: stream.market,
-          end: 'latest',
-          style: 'ticks',
-          count: 500,
-          subscribe: 1,
-          req_id: tickHistoryRequestId
-        })
-      )
       for (const request of candleHistoryRequests) {
         socket.send(
           JSON.stringify({
@@ -228,11 +219,26 @@ export class MarketDataService {
             style: 'candles',
             count: 160,
             granularity: request.granularity,
-            subscribe: 0,
             req_id: request.requestId
           })
         )
       }
+      socket.send(
+        JSON.stringify({
+          ticks_history: stream.market,
+          end: 'latest',
+          style: 'ticks',
+          count: 500,
+          req_id: tickHistoryRequestId
+        })
+      )
+      socket.send(
+        JSON.stringify({
+          ticks: stream.market,
+          subscribe: 1,
+          req_id: liveTickRequestId
+        })
+      )
     } catch {
       this.logger.warn({ market: stream.market }, 'Deriv market stream failed')
       this.handleDisconnected(stream)
@@ -279,19 +285,23 @@ export class MarketDataService {
         candleHistoryRequests.some((request) => request.requestId === requestId)
       ) {
         this.logger.warn(
-          { market: stream.market, requestId },
+          {
+            market: stream.market,
+            requestId,
+            errorCode: errorMessage.data.error.code
+          },
           'Deriv candle history request failed'
         )
         return
       }
 
-      if (requestId === tickHistoryRequestId && stream.socket !== null) {
+      if (requestId === tickHistoryRequestId) {
         this.logger.warn(
-          { market: stream.market },
+          {
+            market: stream.market,
+            errorCode: errorMessage.data.error.code
+          },
           'Deriv tick history request failed; using live ticks only'
-        )
-        stream.socket.send(
-          JSON.stringify({ ticks: stream.market, subscribe: 1 })
         )
         return
       }
@@ -503,7 +513,7 @@ export class MarketDataService {
         continue
       }
 
-      stream.buffer.append({
+      const tick = stream.buffer.append({
         market: stream.market,
         epoch,
         quote,
@@ -511,6 +521,7 @@ export class MarketDataService {
         latencyMs: null,
         receivedAt: new Date(epoch * 1_000).toISOString()
       })
+      this.updateLiveCandles(stream, tick)
       latestEpoch = epoch
     }
   }

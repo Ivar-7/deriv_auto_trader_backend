@@ -34,8 +34,11 @@ function tick(
 class FakeMarketSocket extends EventEmitter {
   public readyState: number = WebSocket.OPEN
   public closeCalls = 0
+  public readonly sentMessages: string[] = []
 
-  public send(): void {}
+  public send(message: string): void {
+    this.sentMessages.push(message)
+  }
 
   public close(): void {
     this.closeCalls += 1
@@ -188,6 +191,22 @@ test('hydrates real historical candles and keeps the current candle live', async
 
   markets.subscribe('R_100')
   await new Promise<void>((resolve) => setImmediate(resolve))
+
+  const requests = socket.sentMessages.map(
+    (message) => JSON.parse(message) as Record<string, unknown>
+  )
+  assert.deepStrictEqual(
+    requests.map((request) => request.req_id),
+    [201, 202, 203, 101, 102]
+  )
+  assert.ok(
+    requests.slice(0, 4).every((request) => request.subscribe === undefined)
+  )
+  assert.deepStrictEqual(requests[4], {
+    ticks: 'R_100',
+    subscribe: 1,
+    req_id: 102
+  })
 
   socket.emit(
     'message',
