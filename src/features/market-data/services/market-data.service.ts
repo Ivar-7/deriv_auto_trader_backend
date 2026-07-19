@@ -68,7 +68,15 @@ export class MarketDataService {
     stream.manuallyClosed = false
     stream.reconnectDeadline = Date.now() + 5 * 60 * 1000
 
-    if (stream.socket?.readyState !== WebSocket.OPEN) {
+    if (this.isStale(stream)) {
+      this.closeStream(stream, false)
+    }
+
+    if (
+      stream.socket === null ||
+      stream.socket.readyState === WebSocket.CLOSED ||
+      stream.socket.readyState === WebSocket.CLOSING
+    ) {
       void this.open(stream)
     }
 
@@ -315,18 +323,21 @@ export class MarketDataService {
   }
 
   private toHealth(stream: MarketStream): MarketDataHealth {
-    const isStale =
-      stream.state === 'live' &&
-      stream.lastTickAt !== null &&
-      Date.now() - new Date(stream.lastTickAt).getTime() > 10_000
-
     return {
-      state: isStale ? 'stale' : stream.state,
+      state: this.isStale(stream) ? 'stale' : stream.state,
       lastTickAt: stream.lastTickAt,
       latencyMs: stream.latencyMs,
       movementBufferSize: stream.buffer.size,
       digitBufferSize: stream.buffer.size
     }
+  }
+
+  private isStale(stream: MarketStream): boolean {
+    return (
+      stream.state === 'live' &&
+      stream.lastTickAt !== null &&
+      Date.now() - new Date(stream.lastTickAt).getTime() > 10_000
+    )
   }
 
   private emptyAnalysis(

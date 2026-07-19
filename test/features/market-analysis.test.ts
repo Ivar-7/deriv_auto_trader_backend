@@ -1,5 +1,7 @@
 import * as assert from 'node:assert'
+import { EventEmitter } from 'node:events'
 import { test } from 'node:test'
+import WebSocket from 'ws'
 import {
   calculateDigitObservation,
   calculateMovementObservation,
@@ -27,6 +29,28 @@ function tick(
     latencyMs: 10,
     receivedAt: '2026-01-01T00:00:00.000Z'
   }
+}
+
+class FakeMarketSocket extends EventEmitter {
+  public readyState: number = WebSocket.OPEN
+  public closeCalls = 0
+
+  public send(): void {}
+
+  public close(): void {
+    this.closeCalls += 1
+    this.readyState = WebSocket.CLOSED
+    this.emit('close')
+  }
+}
+
+interface MarketDataServiceInternals {
+  readonly streams: Map<
+    string,
+    {
+      lastTickAt: string | null
+    }
+  >
 }
 
 test('maintains rolling ticks and identifies rising, falling, and neutral movements', () => {
@@ -151,4 +175,36 @@ test('converts received ticks into live analysis data without a trade connection
   assert.strictEqual(analysis.latestTick?.digit, 1)
   assert.strictEqual(analysis.movement.rising, 1)
   assert.strictEqual(analysis.digits.sampleSize, 2)
+})
+
+test('replaces a stale open market socket when a feed is requested again', () => {
+  const sockets: FakeMarketSocket[] = []
+  const markets = new MarketDataService(
+    { derivApiBaseUrl: 'https://api.derivws.com' },
+    { info: () => undefined, warn: () => undefined },
+    () => {
+      const socket = new FakeMarketSocket()
+      sockets.push(socket)
+      return socket as unknown as WebSocket
+    }
+  )
+
+  markets.subscribe('R_100')
+  markets.recordTick('R_100', {
+    epoch: Math.floor(Date.now() / 1000),
+    quote: '100.123',
+    pipSize: 3
+  })
+
+  const internals = markets as unknown as MarketDataServiceInternals
+  const stream = internals.streams.get('R_100')
+
+  assert.notStrictEqual(stream, undefined)
+  if (stream === undefined) return
+
+  stream.lastTickAt = new Date(Date.now() - 11_000).toISOString()
+  markets.subscribe('R_100')
+
+  assert.strictEqual(sockets.length, 2)
+  assert.strictEqual(sockets[0]?.closeCalls, 1)
 })
