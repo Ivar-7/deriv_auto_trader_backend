@@ -11,7 +11,12 @@ import { apiErrorSchema, getDerivSessionId } from '../deriv-session'
 
 type MarketParams = { market: string }
 type SubscribeBody = { market: string }
+type UnsubscribeBody = { market: string }
 type ScannerBody = { markets: string[] }
+type ReplayBody = {
+  market: string
+  ticks: Array<{ epoch: number; quote: string; pipSize?: number | null }>
+}
 type AnalysisQuery = {
   movementWindow?: number
   digitWindow?: number
@@ -36,16 +41,19 @@ const tickSchema = {
     'epoch',
     'quote',
     'digit',
+    'priceChange',
     'direction',
     'latencyMs',
     'receivedAt'
   ],
   properties: {
     market: { type: 'string' },
+    symbol: { type: 'string' },
     epoch: { type: 'integer' },
     quote: { type: 'string' },
     digit: { type: 'integer', minimum: 0, maximum: 9 },
-    direction: { type: 'string', enum: ['rising', 'falling', 'neutral'] },
+    priceChange: { type: ['string', 'null'] },
+    direction: { type: 'string', enum: ['UP', 'DOWN', 'FLAT'] },
     latencyMs: { type: ['number', 'null'] },
     receivedAt: { type: 'string', format: 'date-time' }
   }
@@ -96,6 +104,7 @@ const candleHistorySchema = {
 
 const analysisSchema = {
   type: 'object',
+  additionalProperties: true,
   required: [
     'market',
     'health',
@@ -205,7 +214,7 @@ const analysisSchema = {
               properties: {
                 direction: {
                   type: 'string',
-                  enum: ['rising', 'falling', 'neutral']
+                  enum: ['UP', 'DOWN', 'FLAT']
                 },
                 length: { type: 'integer', minimum: 1 }
               }
@@ -237,8 +246,8 @@ const analysisSchema = {
         'confidenceThreshold'
       ],
       properties: {
-        movementWindow: { type: 'integer', minimum: 20, maximum: 50 },
-        digitWindow: { type: 'integer', minimum: 100, maximum: 500 },
+        movementWindow: { type: 'integer', minimum: 10, maximum: 100 },
+        digitWindow: { type: 'integer', minimum: 10, maximum: 1000 },
         barrier: { type: 'integer', minimum: 0, maximum: 9 },
         confidenceThreshold: { type: 'number', minimum: 0.5, maximum: 1 }
       }
@@ -249,6 +258,7 @@ const analysisSchema = {
 
 const scannerSchema = {
   type: 'object',
+  additionalProperties: true,
   required: [
     'market',
     'dataState',
@@ -288,6 +298,20 @@ function responseSchema(data: object): FastifySchema {
 }
 
 const marketsRoutes: FastifyPluginAsync = async (fastify): Promise<void> => {
+  fastify.get(
+    '/symbols',
+    {
+      schema: responseSchema({
+        type: 'array',
+        items: { type: 'object', additionalProperties: true }
+      })
+    },
+    async (request) => {
+      requireSelectedAccountId(fastify, request)
+      return { data: await fastify.markets.listActiveSymbols() }
+    }
+  )
+
   fastify.post<{ Body: SubscribeBody }>(
     '/subscribe',
     {
@@ -318,6 +342,79 @@ const marketsRoutes: FastifyPluginAsync = async (fastify): Promise<void> => {
     }
   )
 
+  fastify.post<{ Body: UnsubscribeBody }>(
+    '/unsubscribe',
+    {
+      schema: {
+        body: {
+          type: 'object',
+          required: ['market'],
+          additionalProperties: false,
+          properties: { market: { type: 'string', pattern: '^\\w{2,30}$' } }
+        },
+        ...responseSchema({
+          type: 'object',
+          required: ['market'],
+          properties: { market: { type: 'string' } }
+        })
+      }
+    },
+    async (request) => {
+      requireSelectedAccountId(fastify, request)
+      fastify.markets.unsubscribe(request.body.market)
+      return { data: { market: request.body.market } }
+    }
+  )
+
+  fastify.post<{ Body: ReplayBody }>(
+    '/replay',
+    {
+      schema: {
+        body: {
+          type: 'object',
+          required: ['market', 'ticks'],
+          additionalProperties: false,
+          properties: {
+            market: { type: 'string', pattern: '^\\w{2,30}$' },
+            ticks: {
+              type: 'array',
+              minItems: 1,
+              maxItems: 5000,
+              items: {
+                type: 'object',
+                required: ['epoch', 'quote'],
+                additionalProperties: false,
+                properties: {
+                  epoch: { type: 'integer', minimum: 0 },
+                  quote: { type: 'string', minLength: 1, maxLength: 30 },
+                  pipSize: {
+                    type: ['integer', 'null'],
+                    minimum: 0,
+                    maximum: 12
+                  }
+                }
+              }
+            }
+          }
+        },
+        ...responseSchema(analysisSchema)
+      }
+    },
+    async (request) => {
+      requireSelectedAccountId(fastify, request)
+      return {
+        data: fastify.markets.replay(
+          request.body.market,
+          request.body.ticks.map((tick) => ({
+            epoch: tick.epoch,
+            quote: tick.quote,
+            pipSize: tick.pipSize ?? null
+          }))
+        )
+      }
+    }
+  )
+
   fastify.get<{ Params: MarketParams; Querystring: AnalysisQuery }>(
     '/:market/analysis',
     {
@@ -331,8 +428,8 @@ const marketsRoutes: FastifyPluginAsync = async (fastify): Promise<void> => {
           type: 'object',
           additionalProperties: false,
           properties: {
-            movementWindow: { type: 'integer', minimum: 20, maximum: 50 },
-            digitWindow: { type: 'integer', minimum: 100, maximum: 500 },
+            movementWindow: { type: 'integer', minimum: 10, maximum: 100 },
+            digitWindow: { type: 'integer', minimum: 10, maximum: 1000 },
             barrier: { type: 'integer', minimum: 0, maximum: 9 },
             confidenceThreshold: { type: 'number', minimum: 0.5, maximum: 1 }
           }

@@ -3,29 +3,29 @@ import { EventEmitter } from 'node:events'
 import { test } from 'node:test'
 import WebSocket from 'ws'
 import {
-  calculateDigitObservation,
-  calculateMovementObservation,
-  calculateScannerObservation,
+  calculateAnomalies,
+  calculateDigitFrequency,
+  calculateTickPressure,
   directionForQuotes,
   extractLastDigit,
-  normalizedDeviation,
-  RollingTickBuffer,
-  theoreticalBaseline
+  formatQuote,
+  RollingTickBuffer
 } from '../../src/features/market-data/services/market-analysis.service'
-import { toPublicWebSocketUrl } from '../../src/features/market-data/services/market-data.service'
-import { MarketDataService } from '../../src/features/market-data/services/market-data.service'
-import { MarketDataHealth, MarketTick } from '../../src/shared/contracts'
+import {
+  MarketDataService,
+  toPublicWebSocketUrl
+} from '../../src/features/market-data/services/market-data.service'
+import { MarketTick } from '../../src/shared/contracts'
 
-function tick(
-  digit: number,
-  direction: MarketTick['direction'] = 'neutral'
-): MarketTick {
+function tick(digit: number, epoch = 1_700_000_000): MarketTick {
   return {
     market: 'R_100',
-    epoch: 1_700_000_000,
+    symbol: 'R_100',
+    epoch,
     quote: `100.${digit}`,
     digit,
-    direction,
+    priceChange: null,
+    direction: 'FLAT',
     latencyMs: 10,
     receivedAt: '2026-01-01T00:00:00.000Z'
   }
@@ -33,247 +33,232 @@ function tick(
 
 class FakeMarketSocket extends EventEmitter {
   public readyState: number = WebSocket.OPEN
-  public closeCalls = 0
   public readonly sentMessages: string[] = []
-
-  public send(message: string): void {
-    this.sentMessages.push(message)
-  }
-
   public close(): void {
-    this.closeCalls += 1
     this.readyState = WebSocket.CLOSED
     this.emit('close')
   }
+  public send(message: string): void {
+    this.sentMessages.push(message)
+  }
 }
 
-interface MarketDataServiceInternals {
-  readonly streams: Map<
-    string,
-    {
-      lastTickAt: string | null
-    }
-  >
+function createService(socketFactory?: () => WebSocket): MarketDataService {
+  return new MarketDataService(
+    { derivApiBaseUrl: 'https://api.derivws.com' },
+    { info: () => undefined, warn: () => undefined },
+    socketFactory ?? (() => new FakeMarketSocket() as unknown as WebSocket)
+  )
 }
 
-test('maintains rolling ticks and identifies rising, falling, and neutral movements', () => {
+test('stores correctly formatted quotes, an exact direction, and price change', () => {
   const buffer = new RollingTickBuffer(3)
-  buffer.append({
-    ...tick(0),
-    quote: '100.0',
-    latencyMs: 1,
-    receivedAt: '2026-01-01T00:00:00.000Z'
-  })
-  buffer.append({
-    ...tick(1),
-    quote: '100.1',
-    latencyMs: 1,
-    receivedAt: '2026-01-01T00:00:01.000Z'
-  })
-  buffer.append({
-    ...tick(1),
-    quote: '100.1',
-    latencyMs: 1,
-    receivedAt: '2026-01-01T00:00:02.000Z'
-  })
-  buffer.append({
-    ...tick(0),
-    quote: '100.0',
-    latencyMs: 1,
-    receivedAt: '2026-01-01T00:00:03.000Z'
-  })
-
+  buffer.append({ ...tick(0), quote: '100.1', latencyMs: 1 })
+  buffer.append({ ...tick(1), quote: '100.2', latencyMs: 1 })
+  buffer.append({ ...tick(1), quote: '100.2', latencyMs: 1 })
+  buffer.append({ ...tick(0), quote: '100.1', latencyMs: 1 })
   const values = buffer.values()
-  const movement = calculateMovementObservation(values)
-
   assert.strictEqual(buffer.size, 3)
-  assert.strictEqual(values[0]?.direction, 'rising')
-  assert.strictEqual(movement.rising, 1)
-  assert.strictEqual(movement.falling, 1)
-  assert.strictEqual(movement.neutral, 1)
-  assert.strictEqual(movement.dominantDirection, null)
-  assert.strictEqual(directionForQuotes('10.10', '10.10'), 'neutral')
+  assert.strictEqual(values[0]?.direction, 'UP')
+  assert.strictEqual(values[1]?.direction, 'FLAT')
+  assert.strictEqual(values[2]?.direction, 'DOWN')
+  assert.strictEqual(values[2]?.priceChange, '-0.1')
+  assert.strictEqual(directionForQuotes('10.10', '10.10'), 'FLAT')
+  assert.strictEqual(formatQuote('123.4', 3), '123.400')
   assert.strictEqual(extractLastDigit('123.4', 3), 0)
 })
 
-test('reports equal-to-barrier observations separately from over and under', () => {
-  const observation = calculateDigitObservation(
-    [tick(4), tick(5), tick(6), tick(5)],
-    5
-  )
-
-  assert.strictEqual(observation.underCount, 1)
-  assert.strictEqual(observation.overCount, 1)
-  assert.strictEqual(observation.equalToBarrierCount, 2)
-  assert.strictEqual(observation.matchesCount, 2)
-  assert.strictEqual(observation.differsCount, 2)
-  assert.strictEqual(observation.overObservedPercentage, 0.25)
-  assert.strictEqual(observation.underObservedPercentage, 0.25)
-})
-
-test('uses theoretical baselines and normalized deviation for observations only', () => {
-  assert.strictEqual(theoreticalBaseline('rise'), 0.5)
-  assert.strictEqual(theoreticalBaseline('over', 5), 0.4)
-  assert.strictEqual(theoreticalBaseline('under', 5), 0.5)
-  assert.strictEqual(theoreticalBaseline('matches'), 0.1)
-  assert.strictEqual(theoreticalBaseline('differs'), 0.9)
-  assert.strictEqual(normalizedDeviation(null, 0.5, 20), null)
-  assert.strictEqual(normalizedDeviation(0.5, 0.5, 20), 0)
-  assert.ok((normalizedDeviation(0.75, 0.5, 20) ?? 0) > 0)
-})
-
-test('ranks a scanner observation by least frequency with longest absence tie-break', () => {
-  const health: MarketDataHealth = {
-    state: 'live',
-    lastTickAt: '2026-01-01T00:00:00.000Z',
-    latencyMs: 2,
-    movementBufferSize: 11,
-    digitBufferSize: 11
+test('calculates all rolling frequency windows, pressure, and historical z-score labels', () => {
+  const buffer = new RollingTickBuffer(1_000)
+  for (let index = 0; index < 1_000; index += 1) {
+    buffer.append({
+      ...tick(index < 200 ? 0 : index % 10, 1_700_000_000 + index),
+      quote: `100.${index % 10}`,
+      latencyMs: 1
+    })
   }
-  const observation = calculateScannerObservation(
-    'R_100',
-    health,
-    [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 8].map((digit) => tick(digit))
+  const values = buffer.values(1_000)
+  const frequency = calculateDigitFrequency(values)
+  const pressure = calculateTickPressure(values)
+  const anomalies = calculateAnomalies(values)
+  assert.deepStrictEqual(
+    frequency.map((item) => item.window),
+    [10, 25, 50, 100, 500, 1_000]
   )
-
-  assert.strictEqual(observation.proposedDigit, 0)
-  assert.strictEqual(observation.proposedDigitCount, 1)
-  assert.strictEqual(observation.longestAbsence, 10)
-  assert.strictEqual(observation.theoreticalBaseline, 0.9)
-  assert.notStrictEqual(observation.normalizedDeviation, null)
+  assert.strictEqual(frequency.at(-1)?.digits[0]?.count, 280)
+  assert.deepStrictEqual(
+    pressure.map((item) => item.window),
+    [10, 25, 50, 100]
+  )
+  assert.ok(pressure.every((item) => item.classification !== undefined))
+  assert.strictEqual(
+    anomalies.find((item) => item.digit === 0)?.label,
+    'Extreme'
+  )
 })
 
-test('derives the current public Deriv WebSocket endpoint', () => {
+test('uses the current public Deriv WebSocket endpoint', () => {
   assert.strictEqual(
     toPublicWebSocketUrl('https://api.derivws.com'),
     'wss://api.derivws.com/trading/v1/options/ws/public'
   )
 })
 
-test('converts received ticks into live analysis data without a trade connection', () => {
-  const markets = new MarketDataService(
-    { derivApiBaseUrl: 'https://api.derivws.com' },
-    { info: () => undefined, warn: () => undefined }
-  )
-
-  markets.recordTick('R_100', {
-    epoch: Math.floor(Date.now() / 1000),
-    quote: '100.120',
-    pipSize: 3
-  })
-  markets.recordTick('R_100', {
-    epoch: Math.floor(Date.now() / 1000),
-    quote: '100.121',
-    pipSize: 3
-  })
-
-  const analysis = markets.getAnalysis('R_100', {
-    movementWindow: 20,
-    digitWindow: 100,
-    barrier: 5,
-    confidenceThreshold: 0.6
-  })
-
-  assert.strictEqual(analysis.health.state, 'live')
-  assert.strictEqual(analysis.latestTick?.digit, 1)
-  assert.strictEqual(analysis.movement.rising, 1)
-  assert.strictEqual(analysis.digits.sampleSize, 2)
-  assert.strictEqual(analysis.recentTicks.length, 2)
-})
-
-test('hydrates real historical candles and keeps the current candle live', async () => {
+test('keeps one central socket, requests 1,000 history ticks, and isolates symbols', async () => {
   const socket = new FakeMarketSocket()
-  const markets = new MarketDataService(
-    { derivApiBaseUrl: 'https://api.derivws.com' },
-    { info: () => undefined, warn: () => undefined },
-    () => socket as unknown as WebSocket
-  )
-
+  const markets = createService(() => socket as unknown as WebSocket)
   markets.subscribe('R_100')
+  markets.subscribe('R_75')
   await new Promise<void>((resolve) => setImmediate(resolve))
-
   const requests = socket.sentMessages.map(
     (message) => JSON.parse(message) as Record<string, unknown>
   )
-  assert.deepStrictEqual(
-    requests.map((request) => request.req_id),
-    [201, 202, 203, 101, 102]
+  assert.strictEqual(
+    requests.filter(
+      (request) =>
+        request.ticks_history === 'R_100' && request.style === 'ticks'
+    )[0]?.count,
+    1_000
   )
-  assert.ok(
-    requests.slice(0, 4).every((request) => request.subscribe === undefined)
+  assert.strictEqual(
+    requests.filter(
+      (request) => request.ticks_history === 'R_75' && request.style === 'ticks'
+    )[0]?.count,
+    1_000
   )
-  assert.deepStrictEqual(requests[4], {
-    ticks: 'R_100',
-    subscribe: 1,
-    req_id: 102
-  })
+  assert.strictEqual(
+    requests.filter((request) => request.ticks === 'R_100').length,
+    1
+  )
+  assert.strictEqual(
+    requests.filter((request) => request.ticks === 'R_75').length,
+    1
+  )
 
   socket.emit(
     'message',
     Buffer.from(
       JSON.stringify({
-        msg_type: 'candles',
-        req_id: 201,
-        candles: [
+        msg_type: 'tick',
+        tick: {
+          symbol: 'R_100',
+          epoch: 1_700_000_000,
+          quote: 100.123,
+          pip_size: 3,
+          subscription: { id: 'sub-r100' }
+        }
+      })
+    )
+  )
+  socket.emit(
+    'message',
+    Buffer.from(
+      JSON.stringify({
+        msg_type: 'tick',
+        tick: {
+          symbol: 'R_75',
+          epoch: 1_700_000_000,
+          quote: 75.456,
+          pip_size: 3,
+          subscription: { id: 'sub-r75' }
+        }
+      })
+    )
+  )
+  socket.emit(
+    'message',
+    Buffer.from(
+      JSON.stringify({
+        msg_type: 'tick',
+        tick: {
+          symbol: 'R_100',
+          epoch: 1_700_000_000,
+          quote: 100.123,
+          pip_size: 3
+        }
+      })
+    )
+  )
+
+  assert.strictEqual(
+    markets.getAnalysis('R_100', {
+      movementWindow: 10,
+      digitWindow: 10,
+      barrier: 5,
+      confidenceThreshold: 0.6
+    }).recentTicks.length,
+    1
+  )
+  assert.strictEqual(
+    markets.getAnalysis('R_75', {
+      movementWindow: 10,
+      digitWindow: 10,
+      barrier: 5,
+      confidenceThreshold: 0.6
+    }).latestTick?.quote,
+    '75.456'
+  )
+  markets.unsubscribe('R_100')
+  assert.ok(
+    socket.sentMessages.some(
+      (message) =>
+        (JSON.parse(message) as { forget?: string }).forget === 'sub-r100'
+    )
+  )
+})
+
+test('loads active synthetic symbols and replays through the same 1,000-tick engine', async () => {
+  const socket = new FakeMarketSocket()
+  const markets = createService(() => socket as unknown as WebSocket)
+  const promise = markets.listActiveSymbols()
+  await new Promise<void>((resolve) => setImmediate(resolve))
+  const request = socket.sentMessages
+    .map(
+      (message) =>
+        JSON.parse(message) as { active_symbols?: string; req_id?: number }
+    )
+    .find((message) => message.active_symbols === 'brief')
+  assert.notStrictEqual(request?.req_id, undefined)
+  socket.emit(
+    'message',
+    Buffer.from(
+      JSON.stringify({
+        msg_type: 'active_symbols',
+        req_id: request?.req_id,
+        active_symbols: [
           {
-            epoch: 1_699_999_980,
-            open: 100.1,
-            high: 100.4,
-            low: 100,
-            close: 100.3
+            underlying_symbol: 'R_100',
+            underlying_symbol_name: 'Volatility 100 Index',
+            market: 'synthetic_index',
+            submarket: 'random_index',
+            pip_size: 0.01
+          },
+          {
+            underlying_symbol: 'frxEURUSD',
+            underlying_symbol_name: 'EUR/USD',
+            market: 'forex',
+            submarket: 'major_pairs',
+            pip_size: 0.00001
           }
         ]
       })
     )
   )
-
-  markets.recordTick('R_100', {
-    epoch: 1_700_000_020,
-    quote: '100.500',
-    pipSize: 3
-  })
-
-  const analysis = markets.getAnalysis('R_100', {
-    movementWindow: 20,
-    digitWindow: 100,
-    barrier: 5,
-    confidenceThreshold: 0.6
-  })
-
-  assert.strictEqual(analysis.candles.oneMinute.length, 1)
-  assert.strictEqual(analysis.candles.oneMinute[0]?.open, '100.1')
-  assert.strictEqual(analysis.candles.oneMinute[0]?.high, '100.500')
-  assert.strictEqual(analysis.candles.oneMinute[0]?.close, '100.500')
-})
-
-test('replaces a stale open market socket when a feed is requested again', () => {
-  const sockets: FakeMarketSocket[] = []
-  const markets = new MarketDataService(
-    { derivApiBaseUrl: 'https://api.derivws.com' },
-    { info: () => undefined, warn: () => undefined },
-    () => {
-      const socket = new FakeMarketSocket()
-      sockets.push(socket)
-      return socket as unknown as WebSocket
-    }
+  const symbols = await promise
+  assert.deepStrictEqual(
+    symbols.map((symbol) => symbol.symbol),
+    ['R_100']
   )
-
-  markets.subscribe('R_100')
-  markets.recordTick('R_100', {
-    epoch: Math.floor(Date.now() / 1000),
-    quote: '100.123',
-    pipSize: 3
-  })
-
-  const internals = markets as unknown as MarketDataServiceInternals
-  const stream = internals.streams.get('R_100')
-
-  assert.notStrictEqual(stream, undefined)
-  if (stream === undefined) return
-
-  stream.lastTickAt = new Date(Date.now() - 11_000).toISOString()
-  markets.subscribe('R_100')
-
-  assert.strictEqual(sockets.length, 2)
-  assert.strictEqual(sockets[0]?.closeCalls, 1)
+  assert.strictEqual(symbols[0]?.pipSize, 2)
+  const analysis = markets.replay(
+    'R_100',
+    Array.from({ length: 1_000 }, (_, index) => ({
+      epoch: 1_700_000_000 + index,
+      quote: `100.${index % 10}`,
+      pipSize: 1
+    }))
+  )
+  assert.strictEqual(analysis.health.movementBufferSize, 1_000)
+  assert.strictEqual(analysis.digitFrequency.at(-1)?.sampleSize, 1_000)
+  assert.strictEqual(analysis.recentTicks.length, 50)
 })

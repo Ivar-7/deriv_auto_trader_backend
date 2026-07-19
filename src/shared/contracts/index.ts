@@ -112,13 +112,16 @@ export interface AutomationCycle {
   readonly runningProfitLoss: string
 }
 
-export type TickDirection = 'rising' | 'falling' | 'neutral'
+/** Direction is a recorded price movement, never a trading signal. */
+export type TickDirection = 'UP' | 'DOWN' | 'FLAT'
 
 export interface MarketTick {
   readonly market: string
+  readonly symbol: string
   readonly epoch: number
   readonly quote: string
   readonly digit: number
+  readonly priceChange: string | null
   readonly direction: TickDirection
   readonly latencyMs: number | null
   readonly receivedAt: string
@@ -156,7 +159,7 @@ export interface MovementObservation {
   readonly directionalCount: number
   readonly risingConfidence: number | null
   readonly fallingConfidence: number | null
-  readonly dominantDirection: Exclude<TickDirection, 'neutral'> | null
+  readonly dominantDirection: 'rising' | 'falling' | null
   readonly dominantConfidence: number | null
   readonly meetsConfiguredThreshold: boolean
 }
@@ -185,6 +188,71 @@ export interface MarketStreaks {
     readonly length: number
   } | null
   readonly digit: { readonly digit: number; readonly length: number } | null
+}
+
+export interface DigitFrequencyCell {
+  readonly digit: number
+  readonly count: number
+  readonly percentage: number
+  readonly deviationFromExpected: number
+}
+
+export interface DigitFrequencyWindow {
+  readonly window: number
+  readonly sampleSize: number
+  readonly digits: readonly DigitFrequencyCell[]
+  readonly hottestDigit: number | null
+  readonly coldestDigit: number | null
+}
+
+export interface StreakSummary {
+  readonly current: string | null
+  readonly currentLength: number
+  readonly averageLength: number | null
+  readonly longestRecent: number
+}
+
+export interface DigitStreakAnalysis {
+  readonly repeatedDigits: StreakSummary
+  readonly evenOdd: StreakSummary
+  readonly overUnder: StreakSummary
+}
+
+export type PressureClassification =
+  'Strong Up' | 'Up' | 'Neutral' | 'Down' | 'Strong Down'
+
+export interface TickPressureWindow {
+  readonly window: number
+  readonly sampleSize: number
+  readonly upTicks: number
+  readonly downTicks: number
+  readonly flatTicks: number
+  readonly pressure: number | null
+  readonly classification: PressureClassification
+  readonly consecutiveUp: number
+  readonly consecutiveDown: number
+  /** Standard deviation of recent absolute changes, as a proportion of price. */
+  readonly volatility: number | null
+}
+
+export type AnomalyLabel = 'Normal' | 'Mild' | 'Significant' | 'Extreme'
+
+export interface DigitAnomaly {
+  readonly digit: number
+  readonly count: number
+  readonly sampleSize: number
+  readonly observedPercentage: number | null
+  readonly expectedPercentage: number
+  readonly zScore: number | null
+  readonly label: AnomalyLabel
+}
+
+export interface ActivityScoreComponents {
+  readonly directionalPressure: number
+  readonly volatility: number
+  readonly digitFrequencyDeviation: number
+  readonly streakAnomaly: number
+  readonly tickActivity: number
 }
 
 export interface AnalysisParameters {
@@ -218,6 +286,10 @@ export interface MarketAnalysis {
   readonly digitBoard: readonly DigitBoardCell[]
   readonly digits: DigitObservation
   readonly streaks: MarketStreaks
+  readonly digitFrequency: readonly DigitFrequencyWindow[]
+  readonly digitStreaks: DigitStreakAnalysis
+  readonly tickPressure: readonly TickPressureWindow[]
+  readonly anomalies: readonly DigitAnomaly[]
   readonly parameters: AnalysisParameters
   readonly updatedAt: string
 }
@@ -231,6 +303,23 @@ export interface MarketScannerObservation {
   readonly observedDiffersPercentage: number | null
   readonly theoreticalBaseline: number
   readonly normalizedDeviation: number | null
+  /** A ranking of current activity observations, not a probability or confidence score. */
+  readonly activityScore: number
+  readonly activityComponents: ActivityScoreComponents
+}
+
+export interface ActiveMarketSymbol {
+  readonly symbol: string
+  readonly displayName: string
+  readonly market: string
+  readonly submarket: string
+  readonly pipSize: number | null
+}
+
+export interface ReplayTickInput {
+  readonly epoch: number
+  readonly quote: string
+  readonly pipSize: number | null
 }
 
 export const botTypes = [

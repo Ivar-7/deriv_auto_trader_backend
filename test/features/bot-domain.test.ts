@@ -57,6 +57,29 @@ const analysis: MarketAnalysis = {
     differsObservedPercentage: 0.9
   },
   streaks: { direction: null, digit: null },
+  digitFrequency: [],
+  digitStreaks: {
+    repeatedDigits: {
+      current: null,
+      currentLength: 0,
+      averageLength: null,
+      longestRecent: 0
+    },
+    evenOdd: {
+      current: null,
+      currentLength: 0,
+      averageLength: null,
+      longestRecent: 0
+    },
+    overUnder: {
+      current: null,
+      currentLength: 0,
+      averageLength: null,
+      longestRecent: 0
+    }
+  },
+  tickPressure: [],
+  anomalies: [],
   parameters: {
     movementWindow: 30,
     digitWindow: 200,

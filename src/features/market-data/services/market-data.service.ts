@@ -3,6 +3,7 @@ import { z } from 'zod'
 import { AppConfig } from '../../../config/env'
 import { AppError } from '../../../errors/app-error'
 import {
+  ActiveMarketSymbol,
   AnalysisParameters,
   MarketAnalysis,
   MarketCandle,
@@ -10,46 +11,75 @@ import {
   MarketDataHealth,
   MarketDataState,
   MarketScannerObservation,
-  MarketTick
+  MarketTick,
+  ReplayTickInput
 } from '../../../shared/contracts'
 import {
+  calculateAnomalies,
   calculateDigitBoard,
+  calculateDigitFrequency,
   calculateDigitObservation,
+  calculateDigitStreaks,
   calculateMovementObservation,
-  calculateScannerObservation,
   calculateStreaks,
+  calculateTickPressure,
   defaultAnalysisParameters,
   extractLastDigit,
+  formatQuote,
+  rankActivity,
   RollingTickBuffer
 } from './market-analysis.service'
 
 const quoteValueSchema = z.union([z.string(), z.number()]).transform(String)
-
+const activeSymbolsMessageSchema = z.object({
+  msg_type: z.literal('active_symbols'),
+  req_id: z.coerce.number().int(),
+  active_symbols: z.array(
+    z
+      .object({
+        symbol: z.string().min(1).optional(),
+        underlying_symbol: z.string().min(1).optional(),
+        underlying_symbol_name: z.string().optional(),
+        display_name: z.string().optional(),
+        market: z.string().optional(),
+        market_display_name: z.string().optional(),
+        submarket: z.string().optional(),
+        submarket_display_name: z.string().optional(),
+        pip: z.coerce.number().nonnegative().optional(),
+        pip_size: z.coerce.number().nonnegative().optional()
+      })
+      .refine(
+        (symbol) =>
+          symbol.symbol !== undefined || symbol.underlying_symbol !== undefined
+      )
+  )
+})
 const tickMessageSchema = z.object({
   msg_type: z.literal('tick'),
   tick: z.object({
     epoch: z.coerce.number().int().nonnegative(),
     quote: quoteValueSchema,
     symbol: z.string().min(1),
-    pip_size: z.coerce.number().int().min(0).max(12).optional()
+    pip_size: z.coerce.number().int().min(0).max(12).optional(),
+    subscription: z.object({ id: z.string() }).optional()
   })
 })
-
 const websocketErrorSchema = z.object({
   msg_type: z.string(),
   req_id: z.coerce.number().int().optional(),
-  error: z.object({ code: z.string().optional() }).optional()
+  error: z
+    .object({ code: z.string().optional(), message: z.string().optional() })
+    .optional()
 })
-
 const tickHistoryMessageSchema = z.object({
   msg_type: z.literal('history'),
+  req_id: z.coerce.number().int(),
   history: z.object({
     prices: z.array(quoteValueSchema),
     times: z.array(z.coerce.number().int().nonnegative())
   }),
   pip_size: z.coerce.number().int().min(0).max(12).optional()
 })
-
 const candleHistoryMessageSchema = z.object({
   msg_type: z.literal('candles'),
   req_id: z.coerce.number().int(),
@@ -64,15 +94,12 @@ const candleHistoryMessageSchema = z.object({
   )
 })
 
-const tickHistoryRequestId = 101
-const liveTickRequestId = 102
-const candleHistoryRequests = [
-  { requestId: 201, key: 'oneMinute', granularity: 60 },
-  { requestId: 202, key: 'fiveMinutes', granularity: 300 },
-  { requestId: 203, key: 'oneHour', granularity: 3_600 }
+const candleDefinitions = [
+  { key: 'oneMinute', granularity: 60 },
+  { key: 'fiveMinutes', granularity: 300 },
+  { key: 'oneHour', granularity: 3_600 }
 ] as const
-
-type CandleHistoryKey = (typeof candleHistoryRequests)[number]['key']
+type CandleHistoryKey = (typeof candleDefinitions)[number]['key']
 
 function emptyCandleHistory(): MarketCandleHistory {
   return { oneMinute: [], fiveMinutes: [], oneHour: [] }
@@ -81,20 +108,46 @@ function emptyCandleHistory(): MarketCandleHistory {
 interface MarketStream {
   readonly market: string
   readonly buffer: RollingTickBuffer
+  readonly seenTickKeys: Set<string>
+  readonly seenTickOrder: string[]
   candleHistory: MarketCandleHistory
-  socket: WebSocket | null
   state: MarketDataState
   lastTickAt: string | null
   latencyMs: number | null
-  reconnectAttempt: number
-  reconnectDeadline: number
-  reconnectTimer: NodeJS.Timeout | null
-  manuallyClosed: boolean
+  subscribed: boolean
+  subscriptionId: string | null
 }
 
+interface ActiveSymbolsRequest {
+  readonly resolve: (symbols: readonly ActiveMarketSymbol[]) => void
+  readonly reject: (reason: Error) => void
+  readonly timeout: NodeJS.Timeout
+}
+
+/**
+ * A single public Deriv WebSocket multiplexes every market subscription.  Each
+ * market owns its own buffer and de-duplication keys, so quotes can never be
+ * blended between symbols.
+ */
 export class MarketDataService {
   private readonly streams = new Map<string, MarketStream>()
   private readonly tickListeners = new Set<(tick: MarketTick) => void>()
+  private readonly historyRequests = new Map<number, string>()
+  private readonly candleRequests = new Map<
+    number,
+    { market: string; key: CandleHistoryKey }
+  >()
+  private readonly activeSymbolsRequests = new Map<
+    number,
+    ActiveSymbolsRequest
+  >()
+  private socket: WebSocket | null = null
+  private connectionPromise: Promise<void> | null = null
+  private reconnectTimer: NodeJS.Timeout | null = null
+  private reconnectAttempt = 0
+  private nextRequestId = 1_000
+  private activeSymbols: readonly ActiveMarketSymbol[] | null = null
+  private closing = false
 
   public constructor(
     private readonly config: Pick<AppConfig, 'derivApiBaseUrl'>,
@@ -103,27 +156,59 @@ export class MarketDataService {
       warn: (bindings: object, message?: string) => void
     },
     private readonly socketFactory: (url: string) => WebSocket = (url) =>
-      new WebSocket(url)
+      // The public endpoint is dual-stack. Prefer IPv4 because some hosting
+      // networks advertise IPv6 DNS without a working IPv6 egress path.
+      new WebSocket(url, { family: 4 })
   ) {}
 
   public subscribe(market: string): MarketAnalysis {
     const stream = this.getOrCreateStream(market)
-    stream.manuallyClosed = false
-    stream.reconnectDeadline = Date.now() + 5 * 60 * 1000
-
-    if (this.isStale(stream)) {
-      this.closeStream(stream, false)
-    }
-
+    stream.subscribed = true
+    if (stream.state === 'idle' || stream.state === 'disconnected')
+      stream.state = 'connecting'
     if (
-      stream.socket === null ||
-      stream.socket.readyState === WebSocket.CLOSED ||
-      stream.socket.readyState === WebSocket.CLOSING
+      this.socket?.readyState === WebSocket.OPEN &&
+      this.connectionPromise === null
     ) {
-      void this.open(stream)
+      this.requestMarket(stream)
+    } else {
+      void this.ensureConnection().catch(() => undefined)
     }
-
     return this.getAnalysis(market, defaultAnalysisParameters)
+  }
+
+  public unsubscribe(market: string): void {
+    const stream = this.streams.get(market)
+    if (stream === undefined) return
+    stream.subscribed = false
+    stream.state = 'disconnected'
+    if (
+      stream.subscriptionId !== null &&
+      this.socket?.readyState === WebSocket.OPEN
+    ) {
+      this.send({ forget: stream.subscriptionId, req_id: this.nextId() })
+    }
+    stream.subscriptionId = null
+  }
+
+  public async listActiveSymbols(): Promise<readonly ActiveMarketSymbol[]> {
+    if (this.activeSymbols !== null) return this.activeSymbols
+    await this.ensureConnection()
+    const requestId = this.nextId()
+    return new Promise<readonly ActiveMarketSymbol[]>((resolve, reject) => {
+      const timeout = setTimeout(() => {
+        this.activeSymbolsRequests.delete(requestId)
+        reject(
+          new AppError(
+            504,
+            'ACTIVE_SYMBOLS_TIMEOUT',
+            'Deriv did not return available markets in time.'
+          )
+        )
+      }, 10_000)
+      this.activeSymbolsRequests.set(requestId, { resolve, reject, timeout })
+      this.send({ active_symbols: 'brief', req_id: requestId })
+    })
   }
 
   public getAnalysis(
@@ -131,21 +216,16 @@ export class MarketDataService {
     parameters: AnalysisParameters
   ): MarketAnalysis {
     const stream = this.streams.get(market)
-
-    if (stream === undefined) {
-      return this.emptyAnalysis(market, parameters)
-    }
-
+    if (stream === undefined) return this.emptyAnalysis(market, parameters)
     const movementTicks = stream.buffer.values(parameters.movementWindow)
     const digitTicks = stream.buffer.values(parameters.digitWindow)
-    const health = this.toHealth(stream)
+    const fullTicks = stream.buffer.values(1_000)
     const movement = calculateMovementObservation(movementTicks)
-
     return {
       market,
-      health,
+      health: this.toHealth(stream),
       latestTick: stream.buffer.latest(),
-      recentTicks: stream.buffer.values(parameters.digitWindow),
+      recentTicks: stream.buffer.values(50),
       candles: stream.candleHistory,
       movement: {
         ...movement,
@@ -156,6 +236,10 @@ export class MarketDataService {
       digitBoard: calculateDigitBoard(digitTicks),
       digits: calculateDigitObservation(digitTicks, parameters.barrier),
       streaks: calculateStreaks(digitTicks),
+      digitFrequency: calculateDigitFrequency(fullTicks),
+      digitStreaks: calculateDigitStreaks(fullTicks, parameters.barrier),
+      tickPressure: calculateTickPressure(fullTicks),
+      anomalies: calculateAnomalies(fullTicks),
       parameters,
       updatedAt: new Date().toISOString()
     }
@@ -164,23 +248,36 @@ export class MarketDataService {
   public getScanner(
     markets: readonly string[]
   ): readonly MarketScannerObservation[] {
-    return markets
-      .map((market) => {
+    return rankActivity(
+      markets.map((market) => {
         const stream = this.streams.get(market)
-        const health =
-          stream === undefined ? this.emptyHealth() : this.toHealth(stream)
-        const ticks =
-          stream?.buffer.values(defaultAnalysisParameters.digitWindow) ?? []
-        return calculateScannerObservation(market, health, ticks)
+        return {
+          market,
+          health:
+            stream === undefined ? this.emptyHealth() : this.toHealth(stream),
+          ticks: stream?.buffer.values(1_000) ?? []
+        }
       })
-      .sort((left, right) => {
-        const rightStrength = Math.abs(right.normalizedDeviation ?? 0)
-        const leftStrength = Math.abs(left.normalizedDeviation ?? 0)
-        return (
-          rightStrength - leftStrength ||
-          left.market.localeCompare(right.market)
-        )
-      })
+    )
+  }
+
+  /** Replays stored ticks through the same rolling buffers and analysis functions. */
+  public replay(
+    market: string,
+    ticks: readonly ReplayTickInput[]
+  ): MarketAnalysis {
+    const stream = this.getOrCreateStream(market)
+    stream.buffer.clear()
+    stream.seenTickKeys.clear()
+    stream.seenTickOrder.length = 0
+    stream.lastTickAt = null
+    stream.latencyMs = null
+    for (const tick of [...ticks].sort(
+      (left, right) => left.epoch - right.epoch
+    )) {
+      this.appendTick(stream, tick, false)
+    }
+    return this.getAnalysis(market, defaultAnalysisParameters)
   }
 
   public onTick(listener: (tick: MarketTick) => void): () => void {
@@ -189,223 +286,287 @@ export class MarketDataService {
   }
 
   public closeAll(): void {
-    for (const stream of this.streams.values()) {
-      this.closeStream(stream, true)
+    this.closing = true
+    if (this.reconnectTimer !== null) clearTimeout(this.reconnectTimer)
+    for (const request of this.activeSymbolsRequests.values()) {
+      clearTimeout(request.timeout)
+      request.reject(new Error('Market data service closed'))
     }
+    this.activeSymbolsRequests.clear()
+    this.historyRequests.clear()
+    this.candleRequests.clear()
+    if (this.socket !== null && this.socket.readyState === WebSocket.OPEN)
+      this.socket.close()
+    this.socket = null
     this.streams.clear()
   }
 
-  private async open(stream: MarketStream): Promise<void> {
-    if (stream.manuallyClosed || stream.socket?.readyState === WebSocket.OPEN) {
-      return
-    }
-
-    stream.state = 'connecting'
-
-    try {
-      const socket = this.socketFactory(
-        toPublicWebSocketUrl(this.config.derivApiBaseUrl)
-      )
-      stream.socket = socket
-      this.bindSocket(stream, socket)
-      await this.waitForOpen(socket)
-      stream.reconnectAttempt = 0
-      stream.state = 'connecting'
-      for (const request of candleHistoryRequests) {
-        socket.send(
-          JSON.stringify({
-            ticks_history: stream.market,
-            end: 'latest',
-            style: 'candles',
-            count: 160,
-            granularity: request.granularity,
-            req_id: request.requestId
-          })
-        )
-      }
-      socket.send(
-        JSON.stringify({
-          ticks_history: stream.market,
-          end: 'latest',
-          style: 'ticks',
-          count: 500,
-          req_id: tickHistoryRequestId
-        })
-      )
-      socket.send(
-        JSON.stringify({
-          ticks: stream.market,
-          subscribe: 1,
-          req_id: liveTickRequestId
-        })
-      )
-    } catch {
-      this.logger.warn({ market: stream.market }, 'Deriv market stream failed')
-      this.handleDisconnected(stream)
-    }
+  public recordTick(market: string, input: ReplayTickInput): void {
+    this.appendTick(this.getOrCreateStream(market), input, true)
   }
 
-  private bindSocket(stream: MarketStream, socket: WebSocket): void {
-    socket.on('message', (message: RawData) =>
-      this.handleMessage(stream, message)
+  private async ensureConnection(): Promise<void> {
+    if (this.socket?.readyState === WebSocket.OPEN) return
+    if (this.connectionPromise !== null) return this.connectionPromise
+    this.closing = false
+    const socket = this.socketFactory(
+      toPublicWebSocketUrl(this.config.derivApiBaseUrl)
     )
-    socket.on('error', () => {
-      this.logger.warn({ market: stream.market }, 'Deriv market socket error')
-    })
-    socket.on('close', () => {
-      if (stream.socket === socket && !stream.manuallyClosed) {
-        stream.socket = null
-        this.handleDisconnected(stream)
-      }
-    })
+    this.socket = socket
+    this.connectionPromise = this.waitForOpen(socket)
+      .then(() => {
+        this.reconnectAttempt = 0
+        this.connectionPromise = null
+        for (const stream of this.streams.values()) {
+          if (stream.subscribed) this.requestMarket(stream)
+        }
+      })
+      .catch((error: unknown) => {
+        this.connectionPromise = null
+        this.logger.warn({ error }, 'Deriv market connection failed')
+        this.handleDisconnected(socket)
+        throw error
+      })
+    this.bindSocket(socket)
+    return this.connectionPromise
   }
 
-  private handleMessage(stream: MarketStream, rawMessage: RawData): void {
-    const text = toText(rawMessage)
+  private bindSocket(socket: WebSocket): void {
+    socket.on('message', (message: RawData) => this.handleMessage(message))
+    socket.on('error', () => this.logger.warn({}, 'Deriv market socket error'))
+    socket.on('close', () => this.handleDisconnected(socket))
+  }
 
-    if (text === null) {
-      return
+  private requestMarket(stream: MarketStream): void {
+    if (!stream.subscribed || this.socket?.readyState !== WebSocket.OPEN) return
+    stream.state = 'connecting'
+    stream.subscriptionId = null
+    const historyRequestId = this.nextId()
+    this.historyRequests.set(historyRequestId, stream.market)
+    this.send({
+      ticks_history: stream.market,
+      end: 'latest',
+      style: 'ticks',
+      count: 1_000,
+      req_id: historyRequestId
+    })
+    this.send({ ticks: stream.market, subscribe: 1, req_id: this.nextId() })
+    for (const definition of candleDefinitions) {
+      const requestId = this.nextId()
+      this.candleRequests.set(requestId, {
+        market: stream.market,
+        key: definition.key
+      })
+      this.send({
+        ticks_history: stream.market,
+        end: 'latest',
+        style: 'candles',
+        count: 160,
+        granularity: definition.granularity,
+        req_id: requestId
+      })
     }
+  }
 
+  private handleMessage(rawMessage: RawData): void {
+    const text = toText(rawMessage)
+    if (text === null) return
     let json: unknown
-
     try {
       json = JSON.parse(text)
     } catch {
-      stream.state = 'error'
       return
     }
 
-    const errorMessage = websocketErrorSchema.safeParse(json)
-
-    if (errorMessage.success && errorMessage.data.error !== undefined) {
-      const requestId = errorMessage.data.req_id
-
-      if (
-        candleHistoryRequests.some((request) => request.requestId === requestId)
-      ) {
-        this.logger.warn(
-          {
-            market: stream.market,
-            requestId,
-            errorCode: errorMessage.data.error.code
-          },
-          'Deriv candle history request failed'
-        )
-        return
-      }
-
-      if (requestId === tickHistoryRequestId) {
-        this.logger.warn(
-          {
-            market: stream.market,
-            errorCode: errorMessage.data.error.code
-          },
-          'Deriv tick history request failed; using live ticks only'
-        )
-        return
-      }
-
-      stream.state = 'error'
-      return
-    }
-
-    const historyMessage = tickHistoryMessageSchema.safeParse(json)
-
-    if (historyMessage.success) {
-      this.recordTickHistory(
-        stream,
-        historyMessage.data.history.times,
-        historyMessage.data.history.prices,
-        historyMessage.data.pip_size ?? null
+    const error = websocketErrorSchema.safeParse(json)
+    if (error.success && error.data.error !== undefined) {
+      this.handleApiError(
+        error.data.req_id,
+        error.data.error.message ??
+          error.data.error.code ??
+          'Deriv request failed'
       )
       return
     }
-
-    const candleMessage = candleHistoryMessageSchema.safeParse(json)
-
-    if (candleMessage.success) {
-      const request = candleHistoryRequests.find(
-        (candidate) => candidate.requestId === candleMessage.data.req_id
-      )
-
+    const activeSymbols = activeSymbolsMessageSchema.safeParse(json)
+    if (activeSymbols.success) {
+      const request = this.activeSymbolsRequests.get(activeSymbols.data.req_id)
       if (request !== undefined) {
-        this.setCandleHistory(stream, request.key, candleMessage.data.candles)
+        clearTimeout(request.timeout)
+        this.activeSymbolsRequests.delete(activeSymbols.data.req_id)
+        this.activeSymbols = activeSymbols.data.active_symbols
+          .filter(
+            (symbol) =>
+              symbol.market === 'synthetic_index' ||
+              symbol.market_display_name
+                ?.toLowerCase()
+                .includes('synthetic') === true
+          )
+          .map((symbol) => ({
+            symbol: symbol.symbol ?? symbol.underlying_symbol!,
+            displayName:
+              symbol.display_name ??
+              symbol.underlying_symbol_name ??
+              symbol.symbol ??
+              symbol.underlying_symbol!,
+            market:
+              symbol.market_display_name ??
+              symbol.market ??
+              'Synthetic indices',
+            submarket:
+              symbol.submarket_display_name ??
+              symbol.submarket ??
+              'Synthetic indices',
+            pipSize: toPipDigits(symbol.pip_size ?? symbol.pip ?? null)
+          }))
+          .sort((left, right) =>
+            left.displayName.localeCompare(right.displayName)
+          )
+        request.resolve(this.activeSymbols)
       }
       return
     }
-
-    const message = tickMessageSchema.safeParse(json)
-
-    if (!message.success || message.data.tick.symbol !== stream.market) {
+    const history = tickHistoryMessageSchema.safeParse(json)
+    if (history.success) {
+      const market = this.historyRequests.get(history.data.req_id)
+      this.historyRequests.delete(history.data.req_id)
+      if (market !== undefined) {
+        const stream = this.streams.get(market)
+        if (stream !== undefined)
+          this.recordTickHistory(
+            stream,
+            history.data.history.times,
+            history.data.history.prices,
+            history.data.pip_size ?? null
+          )
+      }
       return
     }
-
-    this.recordTick(stream.market, {
-      epoch: message.data.tick.epoch,
-      quote: message.data.tick.quote,
-      pipSize: message.data.tick.pip_size ?? null
-    })
+    const candles = candleHistoryMessageSchema.safeParse(json)
+    if (candles.success) {
+      const request = this.candleRequests.get(candles.data.req_id)
+      this.candleRequests.delete(candles.data.req_id)
+      if (request !== undefined) {
+        const stream = this.streams.get(request.market)
+        if (stream !== undefined)
+          this.setCandleHistory(stream, request.key, candles.data.candles)
+      }
+      return
+    }
+    const tick = tickMessageSchema.safeParse(json)
+    if (!tick.success) return
+    const stream = this.streams.get(tick.data.tick.symbol)
+    if (stream === undefined || !stream.subscribed) return
+    if (tick.data.tick.subscription !== undefined)
+      stream.subscriptionId = tick.data.tick.subscription.id
+    this.appendTick(
+      stream,
+      {
+        epoch: tick.data.tick.epoch,
+        quote: tick.data.tick.quote,
+        pipSize: tick.data.tick.pip_size ?? null
+      },
+      true
+    )
   }
 
-  public recordTick(
-    market: string,
-    input: Readonly<{ epoch: number; quote: string; pipSize: number | null }>
+  private appendTick(
+    stream: MarketStream,
+    input: ReplayTickInput,
+    notify: boolean
   ): void {
-    const stream = this.getOrCreateStream(market)
+    const quote = formatQuote(input.quote, input.pipSize)
+    const key = `${input.epoch}:${quote}`
+    if (stream.seenTickKeys.has(key)) return
+    stream.seenTickKeys.add(key)
+    stream.seenTickOrder.push(key)
+    if (stream.seenTickOrder.length > 2_000) {
+      const removed = stream.seenTickOrder.shift()
+      if (removed !== undefined) stream.seenTickKeys.delete(removed)
+    }
     const receivedAt = new Date()
-    const quote = input.quote
     const tick = stream.buffer.append({
-      market,
+      market: stream.market,
+      symbol: stream.market,
       epoch: input.epoch,
       quote,
       digit: extractLastDigit(quote, input.pipSize),
-      latencyMs: Math.max(receivedAt.getTime() - input.epoch * 1000, 0),
-      receivedAt: receivedAt.toISOString()
+      latencyMs: notify
+        ? Math.max(receivedAt.getTime() - input.epoch * 1_000, 0)
+        : null,
+      receivedAt: notify
+        ? receivedAt.toISOString()
+        : new Date(input.epoch * 1_000).toISOString()
     })
-    stream.lastTickAt = receivedAt.toISOString()
-    stream.latencyMs = Math.max(receivedAt.getTime() - input.epoch * 1000, 0)
+    stream.lastTickAt = notify ? receivedAt.toISOString() : tick.receivedAt
+    stream.latencyMs = tick.latencyMs
     stream.state = 'live'
     this.updateLiveCandles(stream, tick)
-    for (const listener of this.tickListeners) {
-      listener(tick)
-    }
+    if (notify) for (const listener of this.tickListeners) listener(tick)
   }
 
-  private handleDisconnected(stream: MarketStream): void {
-    if (stream.manuallyClosed || stream.reconnectTimer !== null) {
-      return
+  private handleApiError(requestId: number | undefined, message: string): void {
+    if (requestId !== undefined) {
+      const activeRequest = this.activeSymbolsRequests.get(requestId)
+      if (activeRequest !== undefined) {
+        clearTimeout(activeRequest.timeout)
+        this.activeSymbolsRequests.delete(requestId)
+        activeRequest.reject(
+          new AppError(502, 'ACTIVE_SYMBOLS_FAILED', message)
+        )
+        return
+      }
+      const market = this.historyRequests.get(requestId)
+      if (market !== undefined) {
+        this.historyRequests.delete(requestId)
+        const stream = this.streams.get(market)
+        if (stream !== undefined) stream.state = 'error'
+        this.logger.warn(
+          { market, message },
+          'Deriv tick history request failed'
+        )
+        return
+      }
     }
+    this.logger.warn({ requestId, message }, 'Deriv market request failed')
+  }
 
-    if (Date.now() >= stream.reconnectDeadline) {
-      stream.state = 'disconnected'
-      return
+  private handleDisconnected(socket: WebSocket): void {
+    if (socket !== this.socket || this.closing) return
+    this.socket = null
+    for (const stream of this.streams.values()) {
+      if (stream.subscribed) {
+        stream.state = 'connecting'
+        stream.subscriptionId = null
+      }
     }
-
-    stream.state = 'connecting'
-    const delay = Math.min(2_000 * 2 ** stream.reconnectAttempt, 30_000)
-    stream.reconnectAttempt += 1
-    stream.reconnectTimer = setTimeout(() => {
-      stream.reconnectTimer = null
-      void this.open(stream)
+    if (
+      this.reconnectTimer !== null ||
+      ![...this.streams.values()].some((stream) => stream.subscribed)
+    )
+      return
+    const delay = Math.min(2_000 * 2 ** this.reconnectAttempt, 30_000)
+    this.reconnectAttempt += 1
+    this.reconnectTimer = setTimeout(() => {
+      this.reconnectTimer = null
+      void this.ensureConnection().catch(() => undefined)
     }, delay)
   }
 
   private async waitForOpen(socket: WebSocket): Promise<void> {
-    if (socket.readyState === WebSocket.OPEN) {
-      return
-    }
-
+    if (socket.readyState === WebSocket.OPEN) return
     await new Promise<void>((resolve, reject) => {
-      const timeout = setTimeout(() => {
-        reject(
-          new AppError(
-            504,
-            'MARKET_CONNECTION_TIMEOUT',
-            'The market data connection timed out.'
-          )
-        )
-      }, 10_000)
+      const timeout = setTimeout(
+        () =>
+          reject(
+            new AppError(
+              504,
+              'MARKET_CONNECTION_TIMEOUT',
+              'The market data connection timed out.'
+            )
+          ),
+        10_000
+      )
       socket.once('open', () => {
         clearTimeout(timeout)
         resolve()
@@ -425,23 +586,18 @@ export class MarketDataService {
 
   private getOrCreateStream(market: string): MarketStream {
     const existing = this.streams.get(market)
-
-    if (existing !== undefined) {
-      return existing
-    }
-
+    if (existing !== undefined) return existing
     const stream: MarketStream = {
       market,
-      buffer: new RollingTickBuffer(),
+      buffer: new RollingTickBuffer(1_000),
+      seenTickKeys: new Set(),
+      seenTickOrder: [],
       candleHistory: emptyCandleHistory(),
-      socket: null,
       state: 'idle',
       lastTickAt: null,
       latencyMs: null,
-      reconnectAttempt: 0,
-      reconnectDeadline: Date.now() + 5 * 60 * 1000,
-      reconnectTimer: null,
-      manuallyClosed: false
+      subscribed: false,
+      subscriptionId: null
     }
     this.streams.set(market, stream)
     return stream
@@ -469,11 +625,9 @@ export class MarketDataService {
     market: string,
     parameters: AnalysisParameters
   ): MarketAnalysis {
-    const health = this.emptyHealth()
-
     return {
       market,
-      health,
+      health: this.emptyHealth(),
       latestTick: null,
       recentTicks: [],
       candles: emptyCandleHistory(),
@@ -481,6 +635,10 @@ export class MarketDataService {
       digitBoard: calculateDigitBoard([]),
       digits: calculateDigitObservation([], parameters.barrier),
       streaks: calculateStreaks([]),
+      digitFrequency: calculateDigitFrequency([]),
+      digitStreaks: calculateDigitStreaks([], parameters.barrier),
+      tickPressure: calculateTickPressure([]),
+      anomalies: calculateAnomalies([]),
       parameters,
       updatedAt: new Date().toISOString()
     }
@@ -502,27 +660,12 @@ export class MarketDataService {
     quotes: readonly string[],
     pipSize: number | null
   ): void {
-    let latestEpoch = stream.buffer.latest()?.epoch ?? -1
     const count = Math.min(epochs.length, quotes.length)
-
     for (let index = 0; index < count; index += 1) {
       const epoch = epochs[index]
       const quote = quotes[index]
-
-      if (epoch === undefined || quote === undefined || epoch <= latestEpoch) {
-        continue
-      }
-
-      const tick = stream.buffer.append({
-        market: stream.market,
-        epoch,
-        quote,
-        digit: extractLastDigit(quote, pipSize),
-        latencyMs: null,
-        receivedAt: new Date(epoch * 1_000).toISOString()
-      })
-      this.updateLiveCandles(stream, tick)
-      latestEpoch = epoch
+      if (epoch !== undefined && quote !== undefined)
+        this.appendTick(stream, { epoch, quote, pipSize }, false)
     }
   }
 
@@ -539,62 +682,47 @@ export class MarketDataService {
 
   private updateLiveCandles(stream: MarketStream, tick: MarketTick): void {
     const quote = Number(tick.quote)
-
-    if (!Number.isFinite(quote)) {
-      return
-    }
-
-    for (const request of candleHistoryRequests) {
-      const history = stream.candleHistory[request.key]
+    if (!Number.isFinite(quote)) return
+    for (const definition of candleDefinitions) {
+      const history = stream.candleHistory[definition.key]
       const epoch =
-        Math.floor(tick.epoch / request.granularity) * request.granularity
+        Math.floor(tick.epoch / definition.granularity) * definition.granularity
       const latest = history.at(-1)
-      let nextHistory: readonly MarketCandle[]
-
-      if (latest?.epoch === epoch) {
-        const updated: MarketCandle = {
-          ...latest,
-          high: quote > Number(latest.high) ? tick.quote : latest.high,
-          low: quote < Number(latest.low) ? tick.quote : latest.low,
-          close: tick.quote
-        }
-        nextHistory = [...history.slice(0, -1), updated]
-      } else if (latest === undefined || latest.epoch < epoch) {
-        nextHistory = [
-          ...history,
-          {
-            epoch,
-            open: tick.quote,
-            high: tick.quote,
-            low: tick.quote,
-            close: tick.quote
-          }
-        ].slice(-160)
-      } else {
-        continue
-      }
-
+      const nextHistory =
+        latest?.epoch === epoch
+          ? [
+              ...history.slice(0, -1),
+              {
+                ...latest,
+                high: quote > Number(latest.high) ? tick.quote : latest.high,
+                low: quote < Number(latest.low) ? tick.quote : latest.low,
+                close: tick.quote
+              }
+            ]
+          : latest === undefined || latest.epoch < epoch
+            ? [
+                ...history,
+                {
+                  epoch,
+                  open: tick.quote,
+                  high: tick.quote,
+                  low: tick.quote,
+                  close: tick.quote
+                }
+              ].slice(-160)
+            : history
       stream.candleHistory = {
         ...stream.candleHistory,
-        [request.key]: nextHistory
+        [definition.key]: nextHistory
       }
     }
   }
 
-  private closeStream(stream: MarketStream, manuallyClosed: boolean): void {
-    stream.manuallyClosed = manuallyClosed
-
-    if (stream.reconnectTimer !== null) {
-      clearTimeout(stream.reconnectTimer)
-      stream.reconnectTimer = null
-    }
-
-    const socket = stream.socket
-    stream.socket = null
-
-    if (socket !== null && socket.readyState === WebSocket.OPEN) {
-      socket.close()
-    }
+  private nextId(): number {
+    return this.nextRequestId++
+  }
+  private send(message: object): void {
+    this.socket?.send(JSON.stringify(message))
   }
 }
 
@@ -607,22 +735,18 @@ export function toPublicWebSocketUrl(apiBaseUrl: string): string {
   return baseUrl.toString()
 }
 
+function toPipDigits(value: number | null): number | null {
+  if (value === null || !Number.isFinite(value)) return null
+  if (Number.isInteger(value)) return value
+  const [, fraction = ''] = value.toString().split('.')
+  return fraction.length
+}
+
 function toText(rawData: RawData): string | null {
-  if (typeof rawData === 'string') {
-    return rawData
-  }
-
-  if (Buffer.isBuffer(rawData)) {
-    return rawData.toString('utf8')
-  }
-
-  if (Array.isArray(rawData)) {
-    return Buffer.concat(rawData).toString('utf8')
-  }
-
-  if (rawData instanceof ArrayBuffer) {
+  if (typeof rawData === 'string') return rawData
+  if (Buffer.isBuffer(rawData)) return rawData.toString('utf8')
+  if (Array.isArray(rawData)) return Buffer.concat(rawData).toString('utf8')
+  if (rawData instanceof ArrayBuffer)
     return Buffer.from(rawData).toString('utf8')
-  }
-
   return null
 }
