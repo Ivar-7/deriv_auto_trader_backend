@@ -1,7 +1,8 @@
 import { config as loadDotenv } from 'dotenv'
 import { readdir, readFile } from 'node:fs/promises'
 import { join } from 'node:path'
-import { Pool, PoolClient } from 'pg'
+import { PoolClient } from 'pg'
+import { createDatabasePool } from '../src/config/database'
 import { loadAppConfig } from '../src/config/env'
 
 const migrationFilePattern = /^\d{3}_[a-z0-9_]+\.sql$/
@@ -43,7 +44,7 @@ async function applyMigrations(
 async function main(): Promise<void> {
   loadDotenv({ quiet: true })
   const appConfig = loadAppConfig(process.env)
-  const pool = new Pool({ connectionString: appConfig.databaseUrl })
+  const pool = createDatabasePool(appConfig)
   const client = await pool.connect()
 
   try {

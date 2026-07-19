@@ -10,6 +10,8 @@ The server binds to `0.0.0.0` and reads the standard platform `PORT` directly at
 
 For DigitalOcean App Platform, set the build command to `npm ci --include=dev && npm run build` and the run command to `npm run db:migrate:production && npm start`. App Platform installs production packages by default, so the build command explicitly installs the TypeScript compiler before compiling. The production migration and server commands execute compiled JavaScript only, so they do not require `ts-node` or any other development dependency at runtime.
 
+The attached DigitalOcean development database uses encrypted TLS with a private certificate. Production configuration enables that encrypted connection for the App Platform trusted network; local development and tests continue to use the normal local PostgreSQL connection.
+
 The OAuth callback must be registered in Deriv exactly as `DERIV_OAUTH_REDIRECT_URI`. The server uses Authorization Code + PKCE, exchanges the code server-side, and keeps the access token only in the server-side session store. It never receives a Deriv password.
 
 ## Commands

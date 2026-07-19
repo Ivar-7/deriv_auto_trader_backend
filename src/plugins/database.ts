@@ -1,8 +1,9 @@
-import { Pool } from 'pg'
 import fp from 'fastify-plugin'
+import { type Pool } from 'pg'
+import { createDatabasePool } from '../config/database'
 
 export default fp(async (fastify) => {
-  const pool = new Pool({ connectionString: fastify.config.databaseUrl })
+  const pool = createDatabasePool(fastify.config)
 
   fastify.decorate('database', pool)
   fastify.addHook('onClose', async () => {
