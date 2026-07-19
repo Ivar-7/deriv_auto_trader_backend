@@ -35,3 +35,14 @@ test('rejects an unconfigured Deriv App ID', () => {
     /DERIV_APP_ID/
   )
 })
+
+test('allows an OAuth-free platform bootstrap', () => {
+  const environment: NodeJS.ProcessEnv = { ...validEnvironment }
+  delete environment.DERIV_APP_ID
+  delete environment.DERIV_OAUTH_REDIRECT_URI
+
+  const config = loadAppConfig(environment)
+
+  assert.strictEqual(config.derivAppId, undefined)
+  assert.strictEqual(config.derivOauthRedirectUri, undefined)
+})

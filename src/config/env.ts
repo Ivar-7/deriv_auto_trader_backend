@@ -15,8 +15,11 @@ const appConfigSchema = z.object({
   CORS_ORIGIN: z.union([z.literal('*'), z.string().url()]),
   FRONTEND_ORIGIN: z.string().url(),
   DATABASE_URL: z.string().url(),
-  DERIV_APP_ID: requiredDerivAppId,
-  DERIV_OAUTH_REDIRECT_URI: z.string().url(),
+  // OAuth is deliberately optional during the one-time platform bootstrap.
+  // The service starts and exposes health checks, while the OAuth endpoints
+  // safely report that Deriv has not been configured yet.
+  DERIV_APP_ID: requiredDerivAppId.optional(),
+  DERIV_OAUTH_REDIRECT_URI: z.string().url().optional(),
   DERIV_AUTHORIZATION_URL: z
     .string()
     .url()
@@ -34,8 +37,8 @@ export type AppConfig = Readonly<{
   corsOrigin: string
   frontendOrigin: string
   databaseUrl: string
-  derivAppId: string
-  derivOauthRedirectUri: string
+  derivAppId: string | undefined
+  derivOauthRedirectUri: string | undefined
   derivAuthorizationUrl: string
   derivTokenUrl: string
   derivApiBaseUrl: string

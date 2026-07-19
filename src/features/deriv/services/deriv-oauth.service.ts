@@ -25,17 +25,15 @@ export class DerivOAuthService {
   }
 
   public createAuthorizationUrl(state: string, codeVerifier: string): string {
+    const configuration = this.getConfiguration()
     const authorizationUrl = new URL(this.config.derivAuthorizationUrl)
     const codeChallenge = createHash('sha256')
       .update(codeVerifier)
       .digest('base64url')
 
     authorizationUrl.searchParams.set('response_type', 'code')
-    authorizationUrl.searchParams.set('client_id', this.config.derivAppId)
-    authorizationUrl.searchParams.set(
-      'redirect_uri',
-      this.config.derivOauthRedirectUri
-    )
+    authorizationUrl.searchParams.set('client_id', configuration.appId)
+    authorizationUrl.searchParams.set('redirect_uri', configuration.redirectUri)
     authorizationUrl.searchParams.set('scope', 'trade account_manage')
     authorizationUrl.searchParams.set('state', state)
     authorizationUrl.searchParams.set('code_challenge', codeChallenge)
@@ -48,12 +46,13 @@ export class DerivOAuthService {
     code: string,
     codeVerifier: string
   ): Promise<DerivTokenExchange> {
+    const configuration = this.getConfiguration()
     const form = new URLSearchParams({
       grant_type: 'authorization_code',
-      client_id: this.config.derivAppId,
+      client_id: configuration.appId,
       code,
       code_verifier: codeVerifier,
-      redirect_uri: this.config.derivOauthRedirectUri
+      redirect_uri: configuration.redirectUri
     })
 
     let response: Response
@@ -105,5 +104,22 @@ export class DerivOAuthService {
     } catch {
       return null
     }
+  }
+
+  private getConfiguration(): Readonly<{
+    appId: string
+    redirectUri: string
+  }> {
+    const { derivAppId, derivOauthRedirectUri } = this.config
+
+    if (derivAppId === undefined || derivOauthRedirectUri === undefined) {
+      throw new AppError(
+        503,
+        'DERIV_OAUTH_NOT_CONFIGURED',
+        'Deriv sign-in is being configured. Try again shortly.'
+      )
+    }
+
+    return { appId: derivAppId, redirectUri: derivOauthRedirectUri }
   }
 }

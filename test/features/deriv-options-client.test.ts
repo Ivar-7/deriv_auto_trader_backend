@@ -60,6 +60,16 @@ test('normalizes authorized Deriv demo and real accounts', async () => {
   )
 })
 
+test('does not call Deriv until its App ID has been configured', async () => {
+  const client = new DerivOptionsClient({ ...config, derivAppId: undefined })
+
+  await assert.rejects(
+    () => client.getAccounts('private-token'),
+    (error: unknown) =>
+      error instanceof AppError && error.code === 'DERIV_OAUTH_NOT_CONFIGURED'
+  )
+})
+
 test('maps expired Deriv authorization to a safe error', async () => {
   const client = new DerivOptionsClient(
     config,

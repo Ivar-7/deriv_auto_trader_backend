@@ -38,6 +38,20 @@ test('creates a PKCE Deriv authorization URL', () => {
   )
 })
 
+test('rejects OAuth use until the platform has a Deriv App ID and callback', () => {
+  const service = new DerivOAuthService({
+    ...config,
+    derivAppId: undefined,
+    derivOauthRedirectUri: undefined
+  })
+
+  assert.throws(
+    () => service.createAuthorizationUrl('state-value', 'verifier-value'),
+    (error: unknown) =>
+      error instanceof AppError && error.code === 'DERIV_OAUTH_NOT_CONFIGURED'
+  )
+})
+
 test('exchanges an OAuth code without exposing the access token', async () => {
   const service = new DerivOAuthService(
     config,

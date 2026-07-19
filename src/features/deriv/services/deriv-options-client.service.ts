@@ -88,6 +88,7 @@ export class DerivOptionsClient {
     accessToken: string,
     method: 'GET' | 'POST'
   ): Promise<unknown> {
+    const derivAppId = this.getConfiguredAppId()
     const endpoint = new URL(path, this.config.derivApiBaseUrl).toString()
     let response: Response
 
@@ -96,7 +97,7 @@ export class DerivOptionsClient {
         method,
         headers: {
           authorization: `Bearer ${accessToken}`,
-          'deriv-app-id': this.config.derivAppId,
+          'deriv-app-id': derivAppId,
           ...(method === 'POST' ? { 'content-type': 'application/json' } : {})
         },
         body: method === 'POST' ? '{}' : undefined,
@@ -176,6 +177,18 @@ export class DerivOptionsClient {
     } catch {
       return null
     }
+  }
+
+  private getConfiguredAppId(): string {
+    if (this.config.derivAppId === undefined) {
+      throw new AppError(
+        503,
+        'DERIV_OAUTH_NOT_CONFIGURED',
+        'Deriv sign-in is being configured. Try again shortly.'
+      )
+    }
+
+    return this.config.derivAppId
   }
 
   private getAccountEntries(
