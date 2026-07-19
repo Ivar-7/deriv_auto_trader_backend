@@ -1,43 +1,25 @@
-# Fastify + TypeScript Guidelines
+# Fastify
 
 ## Architecture
+- **Application** — `src/app.ts`: Fastify factory.
+- **Runtime** — `src/server.ts`: listener startup and graceful shutdown.
+- **Features** — `src/modules/<feature>/`: feature plugin, routes, schemas, handlers, and services.
+- **Infrastructure** — `src/plugins/`: shared capabilities, integrations, and decorators.
+- **Configuration** — `src/config/`: validated runtime configuration.
+- **Utilities** — `src/lib/`: framework-independent shared code.
 
-- **Composition** — Register application infrastructure through encapsulated Fastify plugins.
-- **Routes** — Group route modules by domain and keep handlers transport-only.
-- **Services** — Place business rules in services.
-- **Persistence** — Place database access in repositories.
-- **Dependencies** — Maintain acyclic module dependencies.
+## Core Rules
+- **Types** — Enable TypeScript strict mode and use no `any`.
+- **Plugins** — Register features and shared capabilities as Fastify plugins.
+- **Schemas** — Define JSON Schemas for route parameters, queries, headers, JSON request bodies, and JSON response bodies.
+- **Validation** — Keep database and network operations out of schema validation.
+- **Errors** — Translate application errors in one Fastify error handler; never expose stack traces.
+- **Resources** — Release resources through `onClose` hooks.
+- **Logging** — Redact secrets, credentials, and tokens in Pino logs.
+- **Testing** — Build the application without a listener; test through `app.inject()`; close every test instance.
 
-## API
-
-- **Schemas** — Declare schemas for every request and response.
-- **Validation** — Reject every request that fails schema validation.
-- **Versioning** — Prefix every public endpoint with its API version.
-- **Errors** — Convert all operational failures through one application error handler.
-- **Responses** — Return only declared response shapes.
-
-## TypeScript
-
-- **Strictness** — Keep strict compiler options enabled.
-- **Boundaries** — Type every API, persistence, configuration, and external-service boundary.
-- **Unsafe Types** — Do not use `any` or unvalidated type assertions.
-- **Decorators** — Declare module augmentation for every Fastify decoration.
-
-## Security
-
-- **Configuration** — Validate required environment variables during application startup.
-- **Secrets** — Do not hardcode or log secrets, credentials, or tokens.
-- **Authorization** — Authorize every protected resource access.
-- **Client Errors** — Return safe client-facing error messages only.
-
-## Operations
-
-- **Logging** — Use the Fastify logger for application logs.
-- **External Calls** — Apply timeouts to every external request.
-- **Retries** — Retry only idempotent external operations.
-- **Writes** — Make state-changing operations atomic and idempotent.
+## Project Conventions
+- **Compatibility** — Install the version listed for the project's Fastify major in each `@fastify/*` plugin compatibility table.
 
 ## Verification
-
-- **Checks** — Pass formatting, linting, typechecking, tests, and production build before completion.
-- **Tests** — Cover validation, services, routes, authorization, error handling, and external failures.
+- **Checks** — Run `npm run lint`, `npx tsc --noEmit`, `npm test`, and `npm run build`; fix errors and warnings.
