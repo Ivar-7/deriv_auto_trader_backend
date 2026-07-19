@@ -20,15 +20,15 @@ async function authenticateSelectedAccount(t: TestContext) {
   return { app, cookie: `deriv_session=${app.signCookie(sessionId)}` }
 }
 
-test('market analysis requires an authorized selected account', async (t) => {
+test('market analysis is available without a trading account', async (t) => {
   const app = await build(t)
   const response = await app.inject({
     method: 'GET',
     url: '/api/v1/markets/R_100/analysis'
   })
 
-  assert.strictEqual(response.statusCode, 401)
-  assert.strictEqual(response.json().error.code, 'AUTHENTICATION_REQUIRED')
+  assert.strictEqual(response.statusCode, 200)
+  assert.strictEqual(response.json().data.health.state, 'idle')
 })
 
 test('market analysis returns a declared idle data state before subscription', async (t) => {

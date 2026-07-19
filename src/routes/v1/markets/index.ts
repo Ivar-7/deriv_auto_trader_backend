@@ -1,13 +1,7 @@
-import {
-  FastifyInstance,
-  FastifyPluginAsync,
-  FastifyRequest,
-  FastifySchema
-} from 'fastify'
-import { AppError } from '../../../errors/app-error'
+import { FastifyPluginAsync, FastifySchema } from 'fastify'
 import { AnalysisParameters } from '../../../shared/contracts'
 import { defaultAnalysisParameters } from '../../../features/market-data/services/market-analysis.service'
-import { apiErrorSchema, getDerivSessionId } from '../deriv-session'
+import { apiErrorSchema } from '../deriv-session'
 
 type MarketParams = { market: string }
 type SubscribeBody = { market: string }
@@ -306,8 +300,7 @@ const marketsRoutes: FastifyPluginAsync = async (fastify): Promise<void> => {
         items: { type: 'object', additionalProperties: true }
       })
     },
-    async (request) => {
-      requireSelectedAccountId(fastify, request)
+    async () => {
       return { data: await fastify.markets.listActiveSymbols() }
     }
   )
@@ -326,18 +319,7 @@ const marketsRoutes: FastifyPluginAsync = async (fastify): Promise<void> => {
       }
     },
     async (request) => {
-      const accountId = requireSelectedAccountId(fastify, request)
       const analysis = fastify.markets.subscribe(request.body.market)
-      fastify.automation.activity.recordOnce(
-        `${accountId}:market-subscription:${request.body.market}`,
-        {
-          accountId,
-          category: 'connection',
-          event: 'market_subscription_requested',
-          status: 'connecting',
-          market: request.body.market
-        }
-      )
       return { data: analysis }
     }
   )
@@ -360,7 +342,6 @@ const marketsRoutes: FastifyPluginAsync = async (fastify): Promise<void> => {
       }
     },
     async (request) => {
-      requireSelectedAccountId(fastify, request)
       fastify.markets.unsubscribe(request.body.market)
       return { data: { market: request.body.market } }
     }
@@ -401,7 +382,6 @@ const marketsRoutes: FastifyPluginAsync = async (fastify): Promise<void> => {
       }
     },
     async (request) => {
-      requireSelectedAccountId(fastify, request)
       return {
         data: fastify.markets.replay(
           request.body.market,
@@ -438,7 +418,6 @@ const marketsRoutes: FastifyPluginAsync = async (fastify): Promise<void> => {
       }
     },
     async (request) => {
-      requireSelectedAccountId(fastify, request)
       return {
         data: fastify.markets.getAnalysis(
           request.params.market,
@@ -470,20 +449,8 @@ const marketsRoutes: FastifyPluginAsync = async (fastify): Promise<void> => {
       }
     },
     async (request) => {
-      const accountId = requireSelectedAccountId(fastify, request)
-
       for (const market of request.body.markets) {
         fastify.markets.subscribe(market)
-        fastify.automation.activity.recordOnce(
-          `${accountId}:market-subscription:${market}`,
-          {
-            accountId,
-            category: 'connection',
-            event: 'market_subscription_requested',
-            status: 'connecting',
-            market
-          }
-        )
       }
 
       return { data: fastify.markets.getScanner(request.body.markets) }
@@ -510,37 +477,10 @@ const marketsRoutes: FastifyPluginAsync = async (fastify): Promise<void> => {
       }
     },
     async (request) => {
-      requireSelectedAccountId(fastify, request)
       const markets = request.query.markets?.split(',') ?? []
       return { data: fastify.markets.getScanner(markets) }
     }
   )
-}
-
-function requireSelectedAccountId(
-  fastify: FastifyInstance,
-  request: FastifyRequest
-): string {
-  const sessionId = getDerivSessionId(request)
-  const session = fastify.deriv.sessions.getSessionView(sessionId)
-
-  if (session === null) {
-    throw new AppError(
-      401,
-      'SESSION_NOT_FOUND',
-      'Your Deriv session is no longer available. Log in again.'
-    )
-  }
-
-  if (session.selectedAccountId === null) {
-    throw new AppError(
-      400,
-      'ACCOUNT_NOT_SELECTED',
-      'Select an account before viewing market analysis.'
-    )
-  }
-
-  return session.selectedAccountId
 }
 
 function toParameters(query: AnalysisQuery): AnalysisParameters {
